@@ -18,3 +18,5 @@ iac/ansible/inventories/prod/vault.yml
 iac/ansible/inventories/prod/hosts
 iac/ansible/inventories/prod/hosts.*.bak
 iac/terraform/environments/prod/.terraform/
+jars/*.tar.gz
+jars/native/

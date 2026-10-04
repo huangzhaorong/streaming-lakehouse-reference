@@ -60,7 +60,7 @@
     fi
     # ★ jindo-flink 与 flink-oss-fs-hadoop 互斥（JindoSDK 官方要求，G1 前置防御）
     find /opt/flink/lib -name 'flink-oss-fs-hadoop*' -delete
-    test -f /opt/flink/lib/jindo-flink-{{ jindosdk_version }}-full.jar
+    test -f /opt/flink/lib/jindo-flink-{{ jindosdk_version }}-nextarch-full.jar
   changed_when: false  # 覆盖拷贝幂等；缺 jar 由 test -f 硬失败拦截
 
 - name: flink-conf.yaml

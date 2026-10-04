@@ -69,5 +69,47 @@ if [ "$FAILED" -ne 0 ]; then
   exit 1
 fi
 
+# ─── JindoSDK（OSS-HDFS connector + JindoFuse 同源）────────────────────────
+# tarball 一次下载，解出 Flink 所需 3 jar + native so；fuse 用同一 tarball
+#（jindofuse role 独立下载整包，此处只取 jar/so）。
+JINDOSDK_VERSION="6.10.8"
+JINDOSDK_URL="https://jindodata-binary.oss-cn-shanghai.aliyuncs.com/release/${JINDOSDK_VERSION}/jindosdk-${JINDOSDK_VERSION}-linux.tar.gz"
+# 实测 sha256（2026-10-04 下载核对）
+JINDOSDK_SHA256="2377f2ce3982dadc860432b507517431333a1bf726bb0860c3484834063953eb"
+
+sha256_of() { sha256sum "$1" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$1" | awk '{print $1}'; }
+
+JINDO_FLINK_JAR="jindo-flink-${JINDOSDK_VERSION}-nextarch-full.jar"
+if [ -f "${JARS_DIR}/${JINDO_FLINK_JAR}" ] && [ -f "${JARS_DIR}/native/libjindosdk_java.so" ]; then
+  echo "OK  jindosdk jars (already present)"
+else
+  TARBALL="${JARS_DIR}/jindosdk-${JINDOSDK_VERSION}-linux.tar.gz"
+  if [ ! -f "$TARBALL" ] || [ "$(sha256_of "$TARBALL")" != "$JINDOSDK_SHA256" ]; then
+    echo "Downloading jindosdk-${JINDOSDK_VERSION}-linux.tar.gz (~463MB) ..."
+    curl --fail --show-error --silent --location -o "$TARBALL" "$JINDOSDK_URL"
+    actual=$(sha256_of "$TARBALL")
+    if [ "$actual" != "$JINDOSDK_SHA256" ]; then
+      echo "CHECKSUM FAILED for jindosdk tarball"; echo "  expected: $JINDOSDK_SHA256"; echo "  got:      $actual"
+      rm -f "$TARBALL"; exit 1
+    fi
+  fi
+  TOP="jindosdk-${JINDOSDK_VERSION}-linux"
+  mkdir -p "${JARS_DIR}/native"
+  tar xzf "$TARBALL" -C "${JARS_DIR}" \
+    "${TOP}/plugins/flink/${JINDO_FLINK_JAR}" \
+    "${TOP}/lib/jindo-sdk-${JINDOSDK_VERSION}-nextarch.jar" \
+    "${TOP}/lib/jindo-core-${JINDOSDK_VERSION}-nextarch.jar" \
+    "${TOP}/lib/native/libjindosdk_java.so" \
+    "${TOP}/lib/native/libjindosdk_c.so" \
+    "${TOP}/lib/native/libjindo-csdk.so" \
+    "${TOP}/lib/native/libjemalloc.so"
+  mv -f "${JARS_DIR}/${TOP}/plugins/flink/${JINDO_FLINK_JAR}" "${JARS_DIR}/"
+  mv -f "${JARS_DIR}/${TOP}"/lib/jindo-*.jar "${JARS_DIR}/"
+  mv -f "${JARS_DIR}/${TOP}"/lib/native/*.so "${JARS_DIR}/native/"
+  rm -rf "${JARS_DIR}/${TOP}"
+  rm -f "$TARBALL"  # 463MB 中间产物不留（jar 就位即幂等跳过）
+  echo "OK  jindosdk: ${JINDO_FLINK_JAR} + jindo-sdk/core nextarch + native/*.so → jars/native/"
+fi
+
 echo ""
 echo "All JARs downloaded and verified in ${JARS_DIR}/"
