@@ -13,8 +13,8 @@ const require = createRequire(import.meta.url);
 const src = readFileSync(new URL('../workflows/decide.js', import.meta.url), 'utf8');
 const dir = mkdtempSync(join(tmpdir(), 'decide-'));
 const mod = join(dir, 'decide.cjs');
-writeFileSync(mod, src + '\nmodule.exports={decide,updateEquity,DEFAULTS};');
-const { decide, updateEquity, DEFAULTS } = require(mod);
+writeFileSync(mod, src + '\nmodule.exports={decide,updateEquity,normalizeSignal,DEFAULTS};');
+const { decide, updateEquity, normalizeSignal, DEFAULTS } = require(mod);
 
 const cycle = { now: 1_700_000_000, priceLag: 1, signalLag: 1 };
 const sig = {
@@ -97,6 +97,55 @@ test('HOLD: 现金不足不下单', () => {
 
 test('HOLD: 信号缺失（lancer 不可达）', () => {
   assert.equal(decide(DEFAULTS, cycle, st0(), 'BTC-USD', null, px, 'Bullish').action, 'HOLD');
+});
+
+// --- C2 修复：真实 lancer 响应形状（{matches:[...]}）聚合，移植自 consensus _get_similarity ---
+const rawLancer = (queriedAt) => ({
+  pair: 'BTC-USD',
+  matches: [
+    { similarity: 0.5, outcome_pct: 0.8, outcome_max_pct: 1.2 },
+    { similarity: 0.4, outcome_pct: 0.6, outcome_max_pct: 1.0 },
+  ],
+  queried_at: queriedAt,
+});
+
+test('normalizeSignal: lancer {matches} 形状 → 聚合（similarity=matches[0]，outcome 取均值）', () => {
+  const s = normalizeSignal(rawLancer(sig.queried_at));
+  assert.equal(s.similarity, 0.5);
+  assert.ok(Math.abs(s.avg_outcome - 0.7) < 1e-9);
+  assert.ok(Math.abs(s.avg_max_outcome - 1.1) < 1e-9);
+  assert.equal(s.queried_at, sig.queried_at);
+});
+
+test('normalizeSignal: 空 matches / error 对象 / null → null（HOLD signal_unavailable）', () => {
+  assert.equal(normalizeSignal({ matches: [], queried_at: 'x' }), null);
+  assert.equal(normalizeSignal({ error: 'timeout' }), null);
+  assert.equal(normalizeSignal(null), null);
+});
+
+test('normalizeSignal: 扁平形状原样通过（向后兼容）', () => {
+  assert.equal(normalizeSignal(sig).similarity, 0.5);
+});
+
+test('decide 直接吃 lancer 原始响应（C2 端到端）', () => {
+  const r = decide(DEFAULTS, cycle, st0(), 'BTC-USD', rawLancer(sig.queried_at), px, 'Bullish');
+  assert.equal(r.action, 'BUY');
+  assert.equal(r.order.signal_similarity, 0.5);
+});
+
+// --- C4 修复：订单 time 必须为 6 位小数（clearing-house TO_TIMESTAMP SSSSSS 严格匹配）---
+test('order.time 格式 = yyyy-MM-ddTHH:mm:ss.SSSSSSZ（6 位微秒）', () => {
+  const r = decide(DEFAULTS, cycle, st0(), 'BTC-USD', sig, px, 'Bullish');
+  assert.match(r.order.time, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
+});
+
+// --- I2 修复：price<=0 时任何动作都不发生（consensus 早退语义）---
+test('price<=0 → HOLD no_price（持仓也不强平，等价 consensus 早退）', () => {
+  const st = st0();
+  st.positions['BTC-USD'] = { quantity: 0.5, entry_price: 100 };
+  const r = decide(DEFAULTS, cycle, st, 'BTC-USD', { ...sig, similarity: 0.05 }, { price: 0, ts: 0 }, 'Bearish');
+  assert.equal(r.action, 'HOLD');
+  assert.equal(r.reason, 'no_price');
 });
 
 test('updateEquity: 回撤>2% 熔断；UTC 日切重置', () => {

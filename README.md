@@ -104,7 +104,7 @@ bash scripts/tests/test_render_sql.sh
 PYTHONPATH=services/query-api/_deps python3 -m pytest services/query-api n8n/tests/test_workflow_json.py iac/scripts/tests -q
 node --test n8n/tests/*.mjs                    # decide() 风控 14 例
 terraform -chdir=iac/terraform/environments/prod validate
-ansible-playbook -i iac/ansible/inventories/prod/hosts.dummy iac/ansible/playbook_dataplane.yaml --syntax-check
+ansible-playbook -i iac/ansible/tests/hosts.dummy iac/ansible/playbook_dataplane.yaml --syntax-check
 ```
 
 ---

@@ -4,6 +4,12 @@
 # ============================================================
 
 # --- OSS / OSS-HDFS ---
+# Flink OSS 访问模式（评审 I6，R1 回退开关）：
+#   jindo  = 主路径：jindo-flink 直写 OSS-HDFS（warehouse+state 同桶，dls endpoint）
+#   plugin = 回退：flink-oss-fs-hadoop 插件写 state 桶（普通 OSS），湖仓桶经
+#          JindoSDK bucket 级 dls 路由（adtrader 方案F2）；需 vault 填 oss AK
+# G1 金丝雀失败 → 改此键为 plugin → 重跑 playbook_dataplane（幂等，无需手工改机器）
+flink_oss_mode: jindo
 slr_bucket: slr-lakehouse-prod
 slr_state_bucket: slr-lakehouse-prod-state   # R1 回退备用（普通 OSS 命名空间）
 slr_artifacts_bucket: slr-artifacts-prod

@@ -22,9 +22,21 @@ DECIDE_JS = (ROOT / "workflows/decide.js").read_text(encoding="utf-8")
 INIT_JS = """
 const st = $getWorkflowStaticData('global');
 if (st.cash === undefined) {
-  st.cash = 1000; st.positions = {}; st.trade_log = [];
-  st.killswitch = false; st.circuit_broken = false;
+  st.cash = 1000; st.positions = st.positions || {}; st.trade_log = st.trade_log || [];
+  // killswitch 可能由 webhook 分支先置位——初始化不得清除（评审 I7）
+  st.killswitch = st.killswitch ?? false; st.circuit_broken = st.circuit_broken ?? false;
 }
+// 湖内现金校准（评审 I3）：reconcile_balance.json 每次更新后采纳 USD 现金一次
+//（consensus _reconcile_from_ledger 的核心语义；positions 级 ghost/orphan 校准为延后项）
+try {
+  const bal = $('FetchBalance').first().json;
+  if (bal && bal.balances && typeof bal.balances.USD === 'number' && bal.as_of > 0
+      && st.last_balance_as_of !== bal.as_of) {
+    st.lake_cash = bal.balances.USD;
+    st.last_balance_as_of = bal.as_of;
+    st.cash = bal.balances.USD;
+  }
+} catch (e) { /* reconcile JSON 尚未生成——保持本地现金 */ }
 st.cycle_count = (st.cycle_count || 0) + 1;
 const pairs = ((typeof $env !== 'undefined' && $env.SLR_TRADING_PAIRS) || 'BTC-USD,ETH-USD,SOL-USD,DOGE-USD,AVAX-USD,LINK-USD')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -53,7 +65,10 @@ BUILD_PROMPT_JS = """
 // 组装 LLM 情绪分析 prompt（RAG 上下文对齐原 analyst：15min 价格趋势 + lancer 形态信号）。
 const inp = $('SplitInBatches').item.json;
 const raw = $json; // FetchSignal 响应；onError=continue 时为 {error:...}
-const signal = (raw && typeof raw.similarity === 'number') ? raw : null;
+// lancer 真实响应为 {pair, matches:[{similarity, outcome_pct, outcome_max_pct}], queried_at}；
+// 聚合由 decide.js normalizeSignal 权威处理，此处仅透传 + prompt 展示（评审 C2）
+const signal = (raw && typeof raw === 'object' && !raw.error
+  && (Array.isArray(raw.matches) || typeof raw.similarity === 'number')) ? raw : null;
 let trend = 'price trend: no data';
 try {
   const series = ($('PromPrices').first().json?.data?.result ?? []).find(r => r.metric.pair === inp.pair);
@@ -66,9 +81,12 @@ try {
     trend = `15min trend: ${first.toFixed(2)} -> ${last.toFixed(2)} (${pct}%), volatility(stddev)=${vol.toFixed(2)}, samples=${closes.length}`;
   }
 } catch (e) { /* 保持 no data */ }
-const sigTxt = signal
-  ? `Pattern match: similarity=${Number(signal.similarity).toFixed(3)}, avg_outcome=${Number(signal.avg_outcome ?? 0).toFixed(3)}%, avg_max_outcome=${Number(signal.avg_max_outcome ?? 0).toFixed(3)}%, queried_at=${signal.queried_at || 'n/a'}`
-  : 'Pattern match: unavailable (lancer unreachable)';
+const m0 = signal && Array.isArray(signal.matches) ? (signal.matches[0] || null) : null;
+const sigTxt = !signal
+  ? 'Pattern match: unavailable (lancer unreachable)'
+  : (m0 || (signal.matches && signal.matches.length === 0))
+    ? `Pattern match: ${signal.matches.length} matches, top similarity=${Number((m0 || {}).similarity || 0).toFixed(3)}, top outcome=${Number((m0 || {}).outcome_pct || 0).toFixed(3)}%, queried_at=${signal.queried_at || 'n/a'}`
+    : `Pattern match: similarity=${Number(signal.similarity).toFixed(3)}, avg_outcome=${Number(signal.avg_outcome ?? 0).toFixed(3)}%, avg_max_outcome=${Number(signal.avg_max_outcome ?? 0).toFixed(3)}%, queried_at=${signal.queried_at || 'n/a'}`;
 const prompt = `You are a crypto market sentiment analyst for ${inp.pair}.\\n${trend}\\n${sigTxt}\\nRespond ONLY with JSON: {"sentiment":"Bullish|Bearish|Neutral","narrative":"<one short sentence>"}`;
 return [{ json: { ...inp, signal, prompt } }];
 """.strip()
@@ -151,6 +169,7 @@ return [{ json: {
       signals_checked: st.signals_checked || 0,
     },
     position_value_usd: positionValue, pnl_usd: pnl,
+    lake_cash: st.lake_cash, last_balance_as_of: st.last_balance_as_of,
     trade_log: st.trade_log.slice(-50), updated_at: st.updated_at,
   },
 } }];
@@ -293,14 +312,16 @@ http("AnnotateNarrative", "POST", GRAFANA + "/api/annotations", position=[4180, 
                 '"text":{{ JSON.stringify("SLR narrative: " + ($("RiskDecide").item.json.narrative || "(none)")) }}}'))
 
 CONNECTIONS = {
-    "Schedule": {"main": [[{"node": "Init", "type": "main", "index": 0}]]},
+    # 周期级抓取在 Init(pair fan-out) 之前——HTTP 节点以响应替换输入条目，
+    # 若放在 fan-out 之后 pair 会被覆盖（评审 C1）
+    "Schedule": {"main": [[{"node": "PromPrices", "type": "main", "index": 0}]]},
     "Webhook": {"main": [[{"node": "KillSwitch", "type": "main", "index": 0}]]},
     "KillSwitch": {"main": [[{"node": "RespondKillswitch", "type": "main", "index": 0}]]},
-    "Init": {"main": [[{"node": "PromPrices", "type": "main", "index": 0}]]},
     "PromPrices": {"main": [[{"node": "PromPriceLag", "type": "main", "index": 0}]]},
     "PromPriceLag": {"main": [[{"node": "PromSignalLag", "type": "main", "index": 0}]]},
     "PromSignalLag": {"main": [[{"node": "FetchBalance", "type": "main", "index": 0}]]},
-    "FetchBalance": {"main": [[{"node": "SplitInBatches", "type": "main", "index": 0}]]},
+    "FetchBalance": {"main": [[{"node": "Init", "type": "main", "index": 0}]]},
+    "Init": {"main": [[{"node": "SplitInBatches", "type": "main", "index": 0}]]},
     "SplitInBatches": {"main": [
         [],  # done → 结束
         [{"node": "FetchSignal", "type": "main", "index": 0}],  # loop

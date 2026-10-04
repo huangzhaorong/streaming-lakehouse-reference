@@ -18,7 +18,7 @@ bash scripts/tests/test_render_sql.sh
 PYTHONPATH=services/query-api/_deps python3 -m pytest services/query-api n8n/tests/test_workflow_json.py iac/scripts/tests -q
 node --test n8n/tests/*.mjs
 terraform -chdir=iac/terraform/environments/prod validate   # 需 TF_VAR_vpc_name/vswitch_cidr/slr_instances，见计划 Task 6
-for pb in dataplane appplane jobs; do ansible-playbook -i iac/ansible/inventories/prod/hosts.dummy iac/ansible/playbook_$pb.yaml --syntax-check; done
+for pb in dataplane appplane jobs; do ansible-playbook -i iac/ansible/tests/hosts.dummy iac/ansible/playbook_$pb.yaml --syntax-check; done
 
 # n8n workflow：改 workflows/decide.js 或 build_workflow.py 后必须重建 + 测试
 python3 n8n/build_workflow.py && node --test n8n/tests/*.mjs

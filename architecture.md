@@ -106,7 +106,8 @@ Coinbase WebSocket
 
 - bridge 按 Iggy sequence 去重（`bridge_deduplicated_total`）
 - Paimon `ohlcv_1m` 窗口聚合以 window_start+pair 为键幂等
-- reconcile 以湖内 balance（Flink SQL 权威读）校准 n8n staticData 的 cash/positions
+- reconcile 校准：n8n Init 每轮读 query-api `/api/balance`，在 reconcile_balance.json 每次更新后采纳湖内 USD cash（consensus `_reconcile_from_ledger` 的核心语义）；positions 级 ghost/orphan 校准为延后项（偏差经 state 镜像 lake_cash/drift 可观测）
+- 信号缺失语义：lancer 不可达/无匹配 → HOLD（不强平；与 consensus 的 similarity=0→SELL 有意不同，见 n8n/README「已知语义差异」）
 - n8n staticData 仅整轮执行成功后持久化（失败轮不落账——保守语义，等价原 consensus 原子写）
 - 订单幂等：order_id=UUID，湖内 trades PK 去重
 

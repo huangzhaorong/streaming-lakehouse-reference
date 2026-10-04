@@ -57,21 +57,47 @@
       ansible.builtin.set_fact:
         seed_count: "{{ seed_guard.stdout | regex_search('\\|\\s*(\\d+)\\s*\\|', '\\1') }}"
 
-    - name: 已 seed 且无标记时告警（COUNT>0，人工复核——重复 INSERT 会重复累加）
-      ansible.builtin.debug:
-        msg: "balance 表已有数据但 {{ seed_marker }} 不存在——跳过 seed，请人工复核（Paimon aggregation 语义）"
+    # 放行条件收紧（评审 I1）：仅「表不存在（查询失败）」或「COUNT=0 明确解析」才 seed；
+    # 解析不出且无 GUARD_EMPTY_TABLE → fail（宁可停机人工，不可双倍 seed）
+    - name: 守卫不可判定时硬失败
+      ansible.builtin.fail:
+        msg: >-
+          seed 守卫不可判定：无 GUARD_MARKER/GUARD_EMPTY_TABLE 且未解析出 COUNT。
+          人工核查 balance 表后处置（重复 seed 会双倍累加）。stdout 见 seed_guard。
       when: >
         'GUARD_MARKER' not in seed_guard.stdout and
+        'GUARD_EMPTY_TABLE' not in seed_guard.stdout and
+        seed_count | length == 0
+
+    - name: 已有数据且无标记时硬失败（人工复核——重复 INSERT 会重复累加）
+      ansible.builtin.fail:
+        msg: "balance 表已有数据（COUNT={{ seed_count | first }}）但 {{ seed_marker }} 不存在——人工复核后决定"
+      when: >
+        'GUARD_MARKER' not in seed_guard.stdout and
+        'GUARD_EMPTY_TABLE' not in seed_guard.stdout and
         seed_count | length > 0 and (seed_count | first | int) > 0
 
-    - name: 执行 seed（仅 balance 表不存在或为空、且无标记时）
+    - name: 执行 seed（仅表不存在或为空、且无标记时；set -e 防 SQL 失败被掩盖）
       ansible.builtin.shell: |
+        set -e
         {{ env_sh }}
         /opt/flink/bin/sql-client.sh embedded -f {{ sql_dir }}/seed-balance.sql
-        touch {{ seed_marker }}
       when: >
         'GUARD_MARKER' not in seed_guard.stdout and
-        (seed_count | length == 0 or (seed_count | first | int) == 0)
+        ('GUARD_EMPTY_TABLE' in seed_guard.stdout or
+         (seed_count | length > 0 and (seed_count | first | int) == 0))
+      changed_when: true
+
+    - name: 落 seed 标记（root——/data 属 root:0755，flink 用户无写权限）
+      ansible.builtin.file:
+        path: "{{ seed_marker }}"
+        state: touch
+        mode: "0644"
+      become_user: root
+      when: >
+        'GUARD_MARKER' not in seed_guard.stdout and
+        ('GUARD_EMPTY_TABLE' in seed_guard.stdout or
+         (seed_count | length > 0 and (seed_count | first | int) == 0))
       changed_when: true
 
     # 4) 清算流作业（依赖 seed 建出的 balance/trades 表）

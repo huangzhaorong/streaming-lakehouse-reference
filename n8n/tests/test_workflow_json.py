@@ -80,6 +80,26 @@ def test_credentials_referenced():
         assert node["credentials"]["httpBasicAuth"]["name"] == "Grafana"
 
 
+def test_cycle_fetch_chain_precedes_pair_fanout():
+    """C1 回归门禁：周期级 HTTP 抓取必须在 Init(pair fan-out) 之前——
+    HTTP 节点会以响应替换输入条目，若放在 fan-out 之后，pair 条目会被覆盖。"""
+    wf = load()
+    conns = wf["connections"]
+
+    def targets(src, out=0):
+        return [c["node"] for c in (conns.get(src, {}).get("main", [[]])[out] or [])]
+
+    chain = ["Schedule", "PromPrices", "PromPriceLag", "PromSignalLag", "FetchBalance", "Init", "SplitInBatches"]
+    for a, b in zip(chain, chain[1:]):
+        assert targets(a) == [b], f"{a} 的下游应为 [{b}]，实际 {targets(a)}"
+    # fan-out 到 SplitInBatches 之间不得再出现 httpRequest 节点
+    by_name = {n["name"]: n for n in wf["nodes"]}
+    assert by_name["SplitInBatches"]["type"] == "n8n-nodes-base.splitInBatches"
+    assert by_name["Init"]["type"] == "n8n-nodes-base.code"
+    loop_targets = conns["SplitInBatches"]["main"][1]
+    assert [c["node"] for c in loop_targets] == ["FetchSignal"]
+
+
 def test_killswitch_webhook_wired():
     wf = load()
     conns = wf["connections"]

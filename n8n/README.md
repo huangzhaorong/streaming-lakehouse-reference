@@ -58,8 +58,15 @@ curl -X POST .../webhook/killswitch -d '{"killswitch": false}'                  
 ```bash
 sudo -u n8n n8n import:workflow --separate --input=/opt/n8n/workflows/
 sudo -u n8n n8n import:credentials --input=/opt/n8n/credentials/
-sudo -u n8n n8n publish:workflow --id=slr-trading-decision
+sudo -u n8n n8n update:workflow --id=slr-trading-decision --active=true
 ```
+⚠️ import 会按 JSON 覆盖 active 标志（入库 `active:false`）——**每次重部署后必须确认 workflow 处于 active**（UI 或 `n8n list:workflow`）。
 owner 账号首启需 Web 建立（带外，SSH 隧道 `ssh -L 5678:localhost:5678 <app_ip>`，见 runbook）。
+
+## 与原 consensus 的已知语义差异（台账裁决）
+
+- **信号缺失（lancer 不可达/无匹配）→ HOLD**（consensus 会以 similarity=0 触发强平 SELL）——不强平更安全；killswitch/熔断仍只挡开仓、正常信号下的平仓永远放行。
+- BLOCKED reason 优先级：priceLag 与 signalLag 同时超限记 `no_heartbeat`（consensus 记 `no_signal_heartbeat`，仅审计标签差异）。
+- `queried_at` 解析用 `Date.parse`（UTC 严格），修掉了 consensus `time.mktime(strptime)` 的本地时区依赖。
 
 ponytail: Iggy token 每 pair 每轮重新 login（无缓存/401 重试逻辑）——6 次/分钟 HTTP 登录开销可忽略；若 Iggy 侧成为瓶颈再加 token 缓存。

@@ -1,8 +1,10 @@
 # ============================================================
 # Flink {{ flink_version }} — SLR 数据面（JM+TM 同机 standalone）
-# OSS-HDFS 经 JindoSDK（jindo-flink full jar）；lib 内禁止 flink-oss-fs-hadoop（互斥）
-# URI 规范：纯桶名 oss://{{ slr_bucket }}/... + 区域级 dls endpoint
-#（Paimon 拒绝 bucket 内嵌 authority——adtrader 金丝雀实证）
+# OSS 模式：{{ flink_oss_mode }}（group_vars/all.yml 切换，评审 I6）
+#   jindo  = jindo-flink 直写 OSS-HDFS；lib 内禁止 flink-oss-fs-hadoop（互斥）
+#   plugin = flink-oss-fs-hadoop 写 state 桶（普通 OSS）；湖仓桶由 core-site 的
+#            JindoSDK bucket 级 dls 路由承接（adtrader 方案F2）
+# URI 规范：纯桶名 oss://<bucket>/... + endpoint 键路由（Paimon 拒绝 bucket 内嵌 authority）
 # ============================================================
 
 jobmanager.rpc.address: 127.0.0.1
@@ -14,17 +16,27 @@ parallelism.default: 1
 rest.address: 0.0.0.0
 rest.port: {{ flink_ui_port }}
 
-# --- state / checkpoint / HA（全部落 OSS-HDFS）---
+# --- state / checkpoint / HA ---
 state.backend.type: hashmap
+{% if flink_oss_mode == 'jindo' %}
 state.checkpoints.dir: oss://{{ slr_bucket }}/flink/checkpoints
 state.savepoints.dir: oss://{{ slr_bucket }}/flink/savepoints
+{% else %}
+state.checkpoints.dir: oss://{{ slr_state_bucket }}/flink/checkpoints
+state.savepoints.dir: oss://{{ slr_state_bucket }}/flink/savepoints
+{% endif %}
 execution.checkpointing.interval: 60s
 high-availability: zookeeper
 high-availability.zookeeper.quorum: 127.0.0.1:{{ zk_port }}
 high-availability.cluster-id: /streaming-lakehouse
+{% if flink_oss_mode == 'jindo' %}
 high-availability.storageDir: oss://{{ slr_bucket }}/flink/ha
+{% else %}
+high-availability.storageDir: oss://{{ slr_state_bucket }}/flink/ha
+{% endif %}
 
-# --- OSS-HDFS（JindoSDK；RAM role 免 AK，回退见 vault oss_access_key_*）---
+{% if flink_oss_mode == 'jindo' %}
+# --- OSS-HDFS（JindoSDK；RAM role 免 AK）---
 fs.oss.endpoint: {{ oss_dls_endpoint }}
 fs.oss.impl: com.aliyun.jindodata.oss.JindoOssFileSystem
 fs.AbstractFileSystem.oss.impl: com.aliyun.jindodata.oss.OSS
@@ -32,6 +44,12 @@ fs.oss.provider.endpoint: ECS_ROLE
 fs.oss.provider.format: JSON
 {% if vault_oss_access_key_id is defined and vault_oss_access_key_id | length > 0 %}
 # R2 回退已启用：ECS_ROLE 失败时注释掉上方 provider 两行，改用 AK
+fs.oss.accessKeyId: {{ vault_oss_access_key_id }}
+fs.oss.accessKeySecret: {{ vault_oss_access_key_secret }}
+{% endif %}
+{% else %}
+# --- 普通 OSS（flink-oss-fs-hadoop 插件读以下键；需 vault AK）---
+fs.oss.endpoint: {{ oss_internal_endpoint }}
 fs.oss.accessKeyId: {{ vault_oss_access_key_id }}
 fs.oss.accessKeySecret: {{ vault_oss_access_key_secret }}
 {% endif %}

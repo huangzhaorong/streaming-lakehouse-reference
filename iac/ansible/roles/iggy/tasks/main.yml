@@ -76,3 +76,27 @@
   register: iggy_ping
   changed_when: false
   failed_when: iggy_ping.rc != 0
+
+# 评审 C3：原架构 orders topic 由 consensus 启动时创建、prices/replay 由 poller/replay 创建；
+# consensus 删除后无人建 orders（Iggy 无 auto-create）→ 此处幂等 bootstrap 全部三个 topic。
+# 创建命令容错（CLI 语法差异 || true），以硬校验 list 结果为准。
+- name: "bootstrap stream/topics（crypto: prices/orders/replay ×3 分区）"
+  ansible.builtin.shell: |
+    set -uo pipefail
+    IG="/opt/iggy/iggy --address {{ inventory_hostname }}:{{ iggy_tcp_port }} --username {{ iggy_root_username }} --password {{ vault_iggy_password }}"
+    $IG stream create crypto || true
+    for t in prices orders replay; do
+      $IG topic create crypto "$t" --partitions-count 3 || $IG topic create crypto "$t" 3 || true
+    done
+    $IG topic list crypto
+  register: iggy_topics
+  changed_when: false
+  no_log: true   # 命令行含密码
+
+- name: 校验三个 topic 就位
+  ansible.builtin.assert:
+    that:
+      - "'prices' in iggy_topics.stdout"
+      - "'orders' in iggy_topics.stdout"
+      - "'replay' in iggy_topics.stdout"
+    fail_msg: "Iggy topic bootstrap 失败——核对 iggy CLI 语法（iggy topic --help）后重跑；输出见 iggy_topics（no_log，本机 journal 可查 rc）"

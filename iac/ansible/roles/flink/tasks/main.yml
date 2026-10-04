@@ -51,7 +51,8 @@
   register: jars_out
   changed_when: "'Downloading' in jars_out.stdout"
 
-- name: jars 装配到 /opt/flink/lib（幂等覆盖）
+- name: jars 装配（jindo 模式）——jindo-flink 进 lib，互斥清除插件
+  when: flink_oss_mode == 'jindo'
   ansible.builtin.shell: |
     set -e
     cp -f /opt/slr/jars/*.jar /opt/flink/lib/
@@ -61,7 +62,26 @@
     # ★ jindo-flink 与 flink-oss-fs-hadoop 互斥（JindoSDK 官方要求，G1 前置防御）
     find /opt/flink/lib -name 'flink-oss-fs-hadoop*' -delete
     test -f /opt/flink/lib/jindo-flink-{{ jindosdk_version }}-nextarch-full.jar
-  changed_when: false  # 覆盖拷贝幂等；缺 jar 由 test -f 硬失败拦截
+  changed_when: false
+  notify: restart flink
+
+- name: jars 装配（plugin 回退模式）——flink-oss-fs-hadoop 进 lib，移除 jindo-flink
+  when: flink_oss_mode == 'plugin'
+  ansible.builtin.shell: |
+    set -e
+    # jindo-sdk/core 保留（Paimon/Iceberg Hadoop 层经 core-site bucket 级 dls 路由读写湖仓桶）
+    for j in /opt/slr/jars/*.jar; do
+      case "$(basename "$j")" in jindo-flink-*) continue ;; esac
+      cp -f "$j" /opt/flink/lib/
+    done
+    if ls /opt/slr/jars/native/*.so >/dev/null 2>&1; then
+      cp -f /opt/slr/jars/native/*.so /usr/lib64/ && ldconfig
+    fi
+    find /opt/flink/lib -name 'jindo-flink-*' -delete
+    cp -f /opt/flink/opt/flink-oss-fs-hadoop-*.jar /opt/flink/lib/
+    test -n "$(ls /opt/flink/lib/flink-oss-fs-hadoop-*.jar)"
+  changed_when: false
+  notify: restart flink
 
 - name: flink-conf.yaml
   ansible.builtin.template:

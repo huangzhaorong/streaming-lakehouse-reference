@@ -26,7 +26,30 @@ const DEFAULTS = {
 };
 
 const round4 = (x) => Math.round(x * 10000) / 10000;
-const isoNow = (nowSec) => new Date(nowSec * 1000).toISOString();
+// 6 位微秒格式（.000000Z）：clearing-house.sql TO_TIMESTAMP 的 SSSSSS 严格 6 位，
+// 3 位毫秒会解析为 NULL 静默腐蚀湖内 event_time
+const isoNow = (nowSec) => new Date(nowSec * 1000).toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
+
+/**
+ * lancer /api/signals/{pair} 原始响应 → decide() 消费的扁平信号。
+ * 聚合语义移植自 consensus _get_similarity：similarity=matches[0]，outcome/max 取均值。
+ * 空 matches / error 对象 / null → null（decide 记 HOLD signal_unavailable；
+ * 与 consensus 的"返回 0 值→触发强平"不同——信号缺失不强平，见台账 I4 裁决）。
+ */
+function normalizeSignal(raw) {
+  if (!raw || typeof raw !== 'object' || raw.error) return null;
+  if (typeof raw.similarity === 'number') return raw; // 已是扁平形状
+  const matches = Array.isArray(raw.matches) ? raw.matches : null;
+  if (!matches || matches.length === 0) return null;
+  const outcomes = matches.filter((m) => 'outcome_pct' in m).map((m) => m.outcome_pct);
+  const maxOutcomes = matches.filter((m) => 'outcome_max_pct' in m).map((m) => m.outcome_max_pct);
+  return {
+    similarity: matches[0].similarity ?? 0,
+    avg_outcome: outcomes.length ? outcomes.reduce((a, b) => a + b, 0) / outcomes.length : 0,
+    avg_max_outcome: maxOutcomes.length ? maxOutcomes.reduce((a, b) => a + b, 0) / maxOutcomes.length : 0,
+    queried_at: raw.queried_at || '',
+  };
+}
 
 /**
  * 单 pair 交易裁决（纯函数，不修改 st）。
@@ -36,12 +59,17 @@ const isoNow = (nowSec) => new Date(nowSec * 1000).toISOString();
  * @param priceInfo {price, ts(秒)}；@param sentiment 'Bullish'|'Bearish'|'Neutral'
  * @returns {action:'BUY'|'SELL'|'HOLD'|'BLOCKED', reason?, order?, trade?, pnl?}
  */
-function decide(cfg, cycle, st, pair, sig, priceInfo, sentiment) {
-  if (!sig || typeof sig.similarity !== 'number') {
+function decide(cfg, cycle, st, pair, rawSig, priceInfo, sentiment) {
+  // price<=0 早退（consensus 语义）：无价格时任何开平仓都不做
+  const price = priceInfo ? priceInfo.price : 0;
+  if (!(price > 0)) {
+    return { action: 'HOLD', reason: 'no_price', pair };
+  }
+  const sig = normalizeSignal(rawSig);
+  if (!sig) {
     return { action: 'HOLD', reason: 'signal_unavailable', pair };
   }
   const now = cycle.now;
-  const price = priceInfo ? priceInfo.price : 0;
   const pos = (st.positions && st.positions[pair]) || { quantity: 0, entry_price: 0 };
   const holding = pos.quantity > 0;
   const sim = sig.similarity;
@@ -139,10 +167,11 @@ function main() {
   const st = $getWorkflowStaticData('global');
   if (st.cash === undefined) {
     st.cash = cfg.STARTING_BALANCE;
-    st.positions = {};
-    st.trade_log = [];
-    st.killswitch = false;
-    st.circuit_broken = false;
+    st.positions = st.positions || {};
+    st.trade_log = st.trade_log || [];
+    // killswitch 可能已由 webhook 分支先置位——初始化不得清除（I7）
+    st.killswitch = st.killswitch ?? false;
+    st.circuit_broken = st.circuit_broken ?? false;
   }
   const now = Math.floor(Date.now() / 1000);
   const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };

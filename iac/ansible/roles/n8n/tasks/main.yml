@@ -107,13 +107,15 @@
   no_log: true
   notify: reimport n8n
 
-- name: 导入 workflow/credentials + publish（CLI 幂等按 id 覆盖，无需 owner 账号）
+- name: 导入 workflow/credentials + 激活（CLI 幂等按 id 覆盖，无需 owner 账号）
   ansible.builtin.shell: |
     set -e
     /opt/node/bin/n8n import:workflow --separate --input=/opt/n8n/workflows/
     /opt/node/bin/n8n import:credentials --input=/opt/n8n/credentials/
-    /opt/node/bin/n8n publish:workflow --id=slr-trading-decision || \
-      echo "WARN: publish 不可用（版本差异）——owner 建好后在 UI 激活，见 runbook"
+    # 评审 I10：import 会按 JSON 覆盖 active 标志（入库 active:false）——
+    # 每次导入后必须显式激活，否则重部署=交易静默停机
+    /opt/node/bin/n8n update:workflow --id=slr-trading-decision --active=true || \
+      echo "WARN: update:workflow 失败（版本差异）——owner 建好后在 UI 激活并核对，见 runbook"
   become: true
   become_user: n8n
   environment:

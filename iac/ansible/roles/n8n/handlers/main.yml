@@ -4,16 +4,21 @@
     daemon_reload: true
     state: restarted
 
-# 文件变更 → CLI 重导入（幂等）+ 重启生效
+# 文件变更 → CLI 重导入（n8n 用户）+ root 重启（评审 I5：n8n 用户无权 systemctl）
 - name: reimport n8n
   ansible.builtin.shell: |
     set -e
-    /opt/node/bin/n8n import:workflow --separate --input=/opt/n8n/workflows/
-    /opt/node/bin/n8n import:credentials --input=/opt/n8n/credentials/
+    sudo -u n8n env HOME={{ n8n_user_folder }} \
+      N8N_USER_FOLDER={{ n8n_user_folder }} \
+      N8N_ENCRYPTION_KEY='{{ vault_n8n_encryption_key }}' \
+      /opt/node/bin/n8n import:workflow --separate --input=/opt/n8n/workflows/
+    sudo -u n8n env HOME={{ n8n_user_folder }} \
+      N8N_USER_FOLDER={{ n8n_user_folder }} \
+      N8N_ENCRYPTION_KEY='{{ vault_n8n_encryption_key }}' \
+      /opt/node/bin/n8n import:credentials --input=/opt/n8n/credentials/
+    # import 按 JSON 覆盖 active 标志 → 必须显式重新激活（评审 I10）
+    sudo -u n8n env HOME={{ n8n_user_folder }} N8N_USER_FOLDER={{ n8n_user_folder }} \
+      /opt/node/bin/n8n update:workflow --id=slr-trading-decision --active=true || true
     systemctl restart n8n
   become: true
-  become_user: n8n
-  environment:
-    HOME: "{{ n8n_user_folder }}"
-    N8N_USER_FOLDER: "{{ n8n_user_folder }}"
-    N8N_ENCRYPTION_KEY: "{{ vault_n8n_encryption_key }}"
+  no_log: true

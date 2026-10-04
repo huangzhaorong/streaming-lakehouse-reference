@@ -70,11 +70,14 @@ SELECT * FROM canary;
 EOSQL
 # 判定：SELECT 返回 1；控制台 slr-lakehouse-prod → canary/ 出现在 HDFS 命名空间（目录树视图）
 ```
-失败回退（R1/R2）：`fs.oss.endpoint` 改 `oss-cn-beijing-internal.aliyuncs.com`（普通 OSS）、
-flink-conf/core-site 删 Jindo provider 三键、恢复 `flink-oss-fs-hadoop-1.20.3.jar` 到 lib、
-state 桶改 `slr-lakehouse-prod-state`；JindoFuse URI 同步改普通 endpoint。重跑 playbook_dataplane。
+**失败回退（R1/R2，全 IaC 无手工改机器）**：
+1. `iac/ansible/inventories/prod/group_vars/all.yml` → `flink_oss_mode: plugin`
+2. vault 填 `vault_oss_access_key_id/secret`（plugin 模式的 flink-oss-fs-hadoop 需 AK；湖仓桶仍走 JindoSDK bucket 级 dls 路由 + ECS_ROLE）
+3. 重跑 `ansible-playbook playbook_dataplane.yaml`（role 自动换 jar：flink-oss-fs-hadoop 进 lib、jindo-flink 移除；state 目录切 `slr-lakehouse-prod-state` 桶）
+4. 重跑 G1。若 ECS_ROLE 也失败（403）：核对 RAM role 绑定（terraform output instance_registry）后仍失败则 jindo 模式改用 vault AK（flink-conf 模板内置 R2 回退块）。
+JindoFuse 挂载不受模式切换影响（始终 JindoSDK + dls URI）。
 
-**G2 金丝雀（Iggy HTTP）**：
+**G2 金丝雀（Iggy HTTP）**（stream/topics 已由 iggy role 幂等 bootstrap——prices/orders/replay ×3 分区；playbook 内含 list 硬校验）：
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:3000/users/login -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<vault_iggy_password>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
@@ -116,10 +119,18 @@ ssh -L 5678:localhost:5678 root@<app_ip>
 # CLI 导入（role 已跑）与 owner 无关；owner 仅用于 UI 查看执行历史/手动 Execute
 ```
 
+**确认 workflow 处于 active**（每次部署/重部署后必查——import 会按 JSON 覆盖 active 标志）：
+```bash
+sudo -u n8n env HOME=/var/lib/n8n N8N_USER_FOLDER=/var/lib/n8n /opt/node/bin/n8n list:workflow
+# 或 UI 中确认 slr-trading-decision 开关为开；未激活则：
+sudo -u n8n env HOME=/var/lib/n8n N8N_USER_FOLDER=/var/lib/n8n /opt/node/bin/n8n update:workflow --id=slr-trading-decision --active=true
+```
+
 **backfill 历史数据**（lancer/replay 需要历史深度；不迁移旧 compose 数据）：
 ```bash
-# SSH ecs-data-01（fuse rw）：
-cd /opt/slr/scripts && python3 backfill-candles.py --days 60   # 产出 → /mnt/warehouse/backfill/
+# SSH ecs-data-01（fuse rw）；脚本依赖 pyarrow/requests，用 uv 临时环境（评审 I8）：
+cd /opt/slr/scripts
+/usr/local/bin/uv run --python 3.12 --with pyarrow --with requests backfill-candles.py --days 60   # 产出 → /mnt/warehouse/backfill/
 sudo -u flink env JAVA_HOME=/usr/lib/jvm/java-17-openjdk HADOOP_CONF_DIR=/opt/flink/conf/hadoop \
   /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/import-backfill.sql
 systemctl start lancer-indexer    # 首轮建 LanceDB（此后每小时 timer 增量）
