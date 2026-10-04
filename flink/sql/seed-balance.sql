@@ -1,7 +1,7 @@
 -- Phase 10: Seed initial balance and create ledger tables
 --
 -- Run ONCE before submitting the clearing house job.
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/seed-balance.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/seed-balance.sql（渲染后；一次性，守卫见 playbook_jobs.yaml）
 
 SET 'execution.runtime-mode' = 'batch';
 SET 'classloader.parent-first-patterns.additional' = 'org.apache.paimon.;org.apache.hadoop.;com.codahale.';

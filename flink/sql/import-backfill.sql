@@ -4,7 +4,7 @@
 --   1. Run scripts/backfill-candles.py to stage candles.parquet on the volume
 --   2. Flink cluster running with the lakehouse-tier table already created
 --
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/import-backfill.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/import-backfill.sql（渲染后；backfill parquet 由 data-01 写入 /mnt/warehouse/backfill/）
 
 SET 'execution.checkpointing.interval' = '30s';
 SET 'classloader.parent-first-patterns.additional' = 'org.apache.paimon.;org.apache.hadoop.;com.codahale.';

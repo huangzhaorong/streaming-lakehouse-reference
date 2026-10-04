@@ -2,7 +2,8 @@
 # Download connector JARs required by the Flink image.
 #
 # All JARs are fetched from Maven Central or GitHub Releases with SHA-256
-# verification. Run this once before `docker compose build`.
+# verification. 部署时由 flink role 在数据面执行（/opt/slr/scripts/），产物拷入
+# /opt/flink/lib/；本地执行一次可预热 jars/ 并核对 checksum。
 #
 # Usage:
 #   ./scripts/download-jars.sh

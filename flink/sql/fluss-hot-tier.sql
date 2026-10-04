@@ -1,6 +1,6 @@
 -- Phase 4: Stream raw ticks from Iggy into Fluss for sub-second SQL queries
 --
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/fluss-hot-tier.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/fluss-hot-tier.sql（渲染后，见 playbook_jobs.yaml）
 
 SET 'execution.checkpointing.interval' = '10s';
 SET 'pipeline.jars' = 'file:///opt/flink/lib/flink-connector-iggy.jar;file:///opt/flink/lib/fluss-flink-1.20-0.9.0-incubating.jar';

@@ -1,6 +1,6 @@
 -- Phase 3: 1-minute OHLCV candles from Iggy crypto ticks
 --
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/ohlcv-candles.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/ohlcv-candles.sql（渲染后，见 playbook_jobs.yaml）
 
 SET 'pipeline.jars' = 'file:///opt/flink/lib/flink-connector-iggy.jar';
 

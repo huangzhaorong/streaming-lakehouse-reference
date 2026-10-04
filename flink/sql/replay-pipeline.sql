@@ -5,7 +5,7 @@
 -- 1-minute OHLCV candles into the same Paimon table used by the live
 -- pipeline. Candles appear at their original historical timestamps.
 --
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/replay-pipeline.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/replay-pipeline.sql（渲染后，见 playbook_jobs.yaml）
 
 SET 'execution.checkpointing.interval' = '30s';
 SET 'pipeline.jars' = 'file:///opt/flink/lib/flink-connector-iggy.jar';

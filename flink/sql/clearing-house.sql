@@ -1,7 +1,7 @@
 -- Phase 10: Clearing House — Flink processes OrderRequests into ledger entries
 --
 -- Consumes OrderRequest from Iggy, applies fees/slippage, writes to Paimon.
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/clearing-house.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/clearing-house.sql（渲染后，见 playbook_jobs.yaml）
 
 SET 'execution.checkpointing.interval' = '15s';
 SET 'pipeline.jars' = 'file:///opt/flink/lib/flink-connector-iggy.jar';

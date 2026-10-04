@@ -151,21 +151,18 @@ def main():
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print(f"\nWritten to {output_path} ({size_mb:.1f} MB)")
 
-    # Copy to flink-warehouse volume via jobmanager container
-    print("Copying to flink-warehouse volume...")
+    # Stage into the warehouse backfill dir (在数据面 ecs-data-01 上运行；
+    # /mnt/warehouse 为 JindoFuse rw 挂载 → 即 OSS-HDFS warehouse/backfill/)
+    backfill_dir = os.environ.get("SLR_BACKFILL_DIR", "/mnt/warehouse/backfill")
+    print(f"Copying to {backfill_dir} ...")
+    import shutil
     import subprocess
-    subprocess.run(
-        ["docker", "exec", "jobmanager", "mkdir", "-p", "/opt/flink/warehouse/backfill"],
-        check=True,
-    )
-    subprocess.run(
-        ["docker", "cp", output_path, "jobmanager:/opt/flink/warehouse/backfill/candles.parquet"],
-        check=True,
-    )
-    print("Done — parquet staged at /opt/flink/warehouse/backfill/candles.parquet")
+    subprocess.run(["mkdir", "-p", backfill_dir], check=True)
+    shutil.copyfile(output_path, os.path.join(backfill_dir, "candles.parquet"))
+    print(f"Done — parquet staged at {backfill_dir}/candles.parquet")
     print()
-    print("Next step: import into Paimon via Flink SQL:")
-    print("  docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/import-backfill.sql")
+    print("Next step: import into Paimon via Flink SQL (在数据面执行):")
+    print("  /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/import-backfill.sql")
 
 
 if __name__ == "__main__":

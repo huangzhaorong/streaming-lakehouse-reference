@@ -1,7 +1,7 @@
 """Phase 15 — High-Fidelity Strategy Backtester.
 
-Simulates the consensus engine's trading logic against historical candle data
-from Paimon. No running services required — reads parquet files directly.
+Simulates the trading logic (现由 n8n decide() 承载，规则同源) against historical
+candle data from Paimon. No running services required — reads parquet files directly.
 
 Uses signal pre-calculation: LanceDB queries run once, then parameter sweeps
 iterate over the pre-computed signal stream with pure arithmetic.
@@ -41,7 +41,7 @@ WAREHOUSE_PATH = os.environ.get(
     os.path.join(os.path.dirname(__file__), "..", "data", "warehouse", "paimon", "crypto.db", "ohlcv_1m"),
 )
 if not os.path.exists(WAREHOUSE_PATH):
-    WAREHOUSE_PATH = "/data/warehouse/paimon/crypto.db/ohlcv_1m"
+    WAREHOUSE_PATH = os.environ.get("SLR_WAREHOUSE_PATH", "/mnt/warehouse/paimon/crypto.db/ohlcv_1m")
 
 STARTING_BALANCE = 1000.0
 TRADE_SIZE_USD = 50.0

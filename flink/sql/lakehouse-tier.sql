@@ -3,7 +3,7 @@
 -- Paimon: 1-minute OHLCV candles (warm tier, streaming append)
 -- Iceberg: raw tick archive (cold tier, partitioned by day)
 --
--- Submit via: docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/lakehouse-tier.sql
+-- Submit via: /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/lakehouse-tier.sql（渲染后，见 playbook_jobs.yaml）
 
 SET 'execution.checkpointing.interval' = '30s';
 -- Only Iggy connector in pipeline.jars; Paimon/Iceberg/Hadoop resolved from parent classloader (in /opt/flink/lib/)

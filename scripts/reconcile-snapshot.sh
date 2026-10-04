@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reconciliation snapshot — queries Paimon via Flink SQL and writes JSON
-# to the flink-warehouse volume for the consensus engine to read.
+# to the OSS-HDFS warehouse (JindoFuse 挂载点) for query-api / n8n to read.
 #
 # Run via systemd timer on the dataplane host (reconcile-snapshot.timer, every 5min)
 # Or manually: ./scripts/reconcile-snapshot.sh
