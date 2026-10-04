@@ -1,0 +1,7 @@
+# handler 名带服务名（每实例独立重启）；oneshot 服务重启无意义但无害
+- name: restart {{ svc.name }}
+  ansible.builtin.systemd:
+    name: "{{ svc.name }}"
+    daemon_reload: true
+    state: restarted
+  when: svc.mode | default('simple') == 'simple'

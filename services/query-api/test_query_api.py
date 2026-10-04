@@ -85,6 +85,28 @@ def test_audit_no_trades_returns_error_note(client):
     assert "error" in r.json()  # trades 表不存在 → 优雅降级
 
 
+def test_metrics_exposes_state_as_slr_gauges(client):
+    payload = {
+        "positions": {"BTC-USD": {"quantity": 0.5, "entry_price": 100.0}},
+        "cash": 900.0, "equity": 1005.0,
+        "killswitch": False, "circuit_broken": False,
+        "counters": {"trades_buy": 2, "trades_sell": 1, "signals_checked": 100},
+        "position_value_usd": {"BTC-USD": 105.0},
+        "pnl_usd": {"BTC-USD": 5.0},
+        "trade_log": [], "day_baseline": {"date": "2026-10-04", "equity": 1000.0},
+    }
+    assert client.post("/api/state", json=payload).status_code == 200
+    body = client.get("/metrics").text
+    assert "slr_equity_usd 1005" in body
+    assert 'slr_balance{currency="USD"} 900' in body
+    assert 'slr_trades_total{side="BUY"} 2' in body
+    assert 'slr_trades_total{side="SELL"} 1' in body
+    assert "slr_signals_checked 100" in body
+    assert 'slr_position_value_usd{pair="BTC-USD"} 105' in body
+    assert 'slr_pnl_usd{pair="BTC-USD"} 5' in body
+    assert "slr_circuit_breaker 0" in body
+
+
 def test_candles_filters_by_pair_and_window(client):
     rows = client.get("/api/candles/BTC-USD?minutes=60").json()
     assert len(rows) == 1

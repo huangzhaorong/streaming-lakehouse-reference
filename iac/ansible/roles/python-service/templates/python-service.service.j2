@@ -1,0 +1,18 @@
+[Unit]
+Description=SLR {{ svc.name }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type={{ 'oneshot' if svc.mode | default('simple') == 'oneshot' else 'simple' }}
+User=slr
+WorkingDirectory=/opt/slr/services/{{ svc.name }}
+EnvironmentFile=/etc/slr/{{ svc.name }}.env
+ExecStart=/opt/slr/services/{{ svc.name }}/venv/bin/python -u main.py
+{% if svc.mode | default('simple') == 'simple' %}
+Restart=always
+RestartSec=5
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

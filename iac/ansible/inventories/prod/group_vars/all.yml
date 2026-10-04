@@ -28,6 +28,7 @@ iggy_version: "0.7.0"
 prometheus_version: "v2.53.0"
 grafana_version: "11.1.0"
 node_version: "v24.10.0"   # 实施首日从 https://npmmirror.com/mirrors/node/ 核对最新 v24 LTS patch 回填
+node_mirror_base: "https://npmmirror.com/mirrors/node"
 n8n_version: "2.41.6"      # 锁死：n8n 3.0 起废弃 npm 安装方式
 python_version: "3.12"
 uv_version: "0.8.10"       # uv standalone Python（ALinux3 dnf 无 3.12 的确定性替代）
@@ -53,8 +54,9 @@ flink_metrics_port: 9249
 prometheus_port: 9090
 grafana_port: 3001
 n8n_port: 5678
-query_api_port: 8009
-query_api_metrics_port: 8010
+query_api_port: 8009   # /metrics 同端口（无独立 metrics 端口）
 
 # --- 业务 ---
 trading_pairs: "BTC-USD,ETH-USD,SOL-USD,DOGE-USD,AVAX-USD,LINK-USD"
+iggy_root_username: admin
+iggy_stream: crypto

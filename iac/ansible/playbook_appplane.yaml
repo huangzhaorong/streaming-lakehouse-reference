@@ -1,0 +1,28 @@
+# 应用面部署：Python 服务 ×6 / query-api / Prometheus / Grafana / n8n / JindoFuse(ro)
+# 前置：playbook_dataplane 已完成（Iggy/Flink 可达）；vault.yml 就位
+# 用法：ansible-playbook playbook_appplane.yaml
+- name: SLR appplane (ecs-app-01)
+  hosts: appplane
+  become: true
+  roles:
+    - common
+    - jindofuse      # ro 挂载（pyarrow/DuckDB 直读）
+  tasks:
+    - name: 部署 Python 服务（poller/bridge/lancer/lancer-indexer/replay/query-api）
+      ansible.builtin.include_role:
+        name: python-service
+      loop: "{{ slr_python_services }}"
+      loop_control:
+        loop_var: svc
+
+    - name: Prometheus
+      ansible.builtin.include_role:
+        name: prometheus
+
+    - name: Grafana
+      ansible.builtin.include_role:
+        name: grafana
+
+    - name: n8n（决策引擎；owner 账号首启带外建立，见 runbook Phase 3）
+      ansible.builtin.include_role:
+        name: n8n

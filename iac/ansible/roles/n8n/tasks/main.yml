@@ -1,0 +1,123 @@
+# n8n {{ n8n_version }}（npm 全局安装，锁死版本——n8n 3.0 起废弃 npm 方式，升级需重评估）
+- name: 下载 Node {{ node_version }}
+  ansible.builtin.get_url:
+    url: "{{ node_mirror_base }}/{{ node_version }}/node-{{ node_version }}-linux-x64.tar.xz"
+    dest: "/tmp/node-{{ node_version }}.tar.xz"
+    mode: "0644"
+  register: node_dl
+  until: node_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包 Node 到 /opt
+  ansible.builtin.unarchive:
+    src: "/tmp/node-{{ node_version }}.tar.xz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/node-{{ node_version }}-linux-x64"
+
+- name: /opt/node 符号链接 + PATH
+  ansible.builtin.file:
+    src: "/opt/node-{{ node_version }}-linux-x64"
+    dest: /opt/node
+    state: link
+
+- name: node 可执行链接
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+  loop:
+    - { src: /opt/node/bin/node, dest: /usr/local/bin/node }
+    - { src: /opt/node/bin/npm, dest: /usr/local/bin/npm }
+    - { src: /opt/node/bin/npx, dest: /usr/local/bin/npx }
+
+- name: 全局安装 n8n@{{ n8n_version }}（npmmirror registry）
+  ansible.builtin.command: >
+    /opt/node/bin/npm install -g n8n@{{ n8n_version }}
+    --registry={{ npm_registry }} --prefix=/opt/node
+  args:
+    creates: /opt/node/bin/n8n
+
+- name: n8n 用户与目录
+  ansible.builtin.user:
+    name: n8n
+    system: true
+    shell: /sbin/nologin
+    home: "{{ n8n_user_folder }}"
+    create_home: true
+
+- name: 目录（0700——SQLite 内含加密凭据）
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: n8n
+    group: n8n
+    mode: "0700"
+  loop:
+    - "{{ n8n_user_folder }}"
+    - /opt/n8n/workflows
+    - /opt/n8n/credentials
+
+- name: EnvironmentFile（vault 渲染：加密 key + SLR_* 运行时变量）
+  ansible.builtin.template:
+    src: n8n.env.j2
+    dest: /etc/slr/n8n.env
+    owner: n8n
+    mode: "0600"
+  notify: restart n8n
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: n8n.service.j2
+    dest: /etc/systemd/system/n8n.service
+    mode: "0644"
+  notify: restart n8n
+
+- name: 启动并自启
+  ansible.builtin.systemd:
+    name: n8n
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待 5678
+  ansible.builtin.wait_for:
+    port: "{{ n8n_port }}"
+    host: 127.0.0.1
+    timeout: 120
+
+- name: 同步 workflow JSON
+  ansible.builtin.copy:
+    src: ../../../../n8n/workflows/trading-decision.json
+    dest: /opt/n8n/workflows/trading-decision.json
+    owner: n8n
+    mode: "0600"
+  notify: reimport n8n
+
+- name: 渲染凭据（vault → n8n credential，id 与 workflow 引用一致）
+  ansible.builtin.template:
+    src: "credentials/{{ item }}.j2"
+    dest: "/opt/n8n/credentials/{{ item }}"
+    owner: n8n
+    mode: "0600"
+  loop:
+    - dashscope.json
+    - grafana.json
+  no_log: true
+  notify: reimport n8n
+
+- name: 导入 workflow/credentials + publish（CLI 幂等按 id 覆盖，无需 owner 账号）
+  ansible.builtin.shell: |
+    set -e
+    /opt/node/bin/n8n import:workflow --separate --input=/opt/n8n/workflows/
+    /opt/node/bin/n8n import:credentials --input=/opt/n8n/credentials/
+    /opt/node/bin/n8n publish:workflow --id=slr-trading-decision || \
+      echo "WARN: publish 不可用（版本差异）——owner 建好后在 UI 激活，见 runbook"
+  become: true
+  become_user: n8n
+  environment:
+    HOME: "{{ n8n_user_folder }}"
+    N8N_USER_FOLDER: "{{ n8n_user_folder }}"
+    N8N_ENCRYPTION_KEY: "{{ vault_n8n_encryption_key }}"
+  changed_when: false

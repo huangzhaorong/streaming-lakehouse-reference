@@ -12,7 +12,7 @@
   GET  /api/trades            n8n 镜像的最近 50 笔交易日志
   GET  /api/state             n8n 每轮 POST 的完整决策状态
   POST /api/state             原子写状态（tmp+rename）
-  GET  /metrics               Prometheus 指标（独立端口）
+  GET  /metrics               Prometheus 指标（同端口；state.json → slr_* 指标）
 
 约束：DuckDB 只读 append-only 表（ohlcv_1m/trades 数据文件）；
 balance PK 表不直接读 parquet，只消费 Flink SQL 产出的 reconcile JSON。
@@ -26,23 +26,18 @@ import time
 
 import duckdb
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from prometheus_client import start_http_server
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import REGISTRY, generate_latest
+from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s query-api: %(message)s")
 log = logging.getLogger("query-api")
 
 PORT = int(os.environ.get("QUERY_API_PORT", "8009"))
-METRICS_PORT = int(os.environ.get("QUERY_API_METRICS_PORT", "8010"))
 WAREHOUSE_PATH = os.environ.get("QUERY_API_WAREHOUSE_PATH", "/mnt/warehouse/paimon/crypto.db")
 STATE_DIR = os.environ.get("QUERY_API_STATE_DIR", "/var/lib/query-api")
 PAIRS = [p.strip() for p in os.environ.get("TRADING_PAIRS", "BTC-USD,ETH-USD,SOL-USD,DOGE-USD,AVAX-USD,LINK-USD").split(",") if p.strip()]
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
-
-try:  # 测试 reload 时端口可能被占用，指标服务尽力而为
-    start_http_server(METRICS_PORT)
-except OSError as exc:
-    log.warning("metrics server not started: %s", exc)
 
 app = FastAPI(title="SLR Query API — read-only lake queries + n8n state mirror")
 
@@ -53,6 +48,58 @@ def _read_state() -> dict:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+class StateCollector:
+    """每次抓取时读 state.json → slr_* 指标（替代原 consensus_* 指标面，dashboard 已同步改名）。
+
+    ponytail: trades/signals 计数来自 n8n 镜像的累计值（进程重启由 staticData 恢复）；
+    trade_log 仅存最近 200 条，计数不依赖它。
+    """
+
+    def collect(self):
+        st = _read_state()
+        if not st:
+            return
+        counters = st.get("counters", {})
+
+        eq = GaugeMetricFamily("slr_equity_usd", "Total equity (cash + positions)")
+        eq.add_metric([], float(st.get("equity", 0)))
+        yield eq
+        bal = GaugeMetricFamily("slr_balance", "Cash balance by currency", labels=["currency"])
+        bal.add_metric(["USD"], float(st.get("cash", 0)))
+        yield bal
+        cb = GaugeMetricFamily("slr_circuit_breaker", "0=normal 1=drawdown-tripped 2=killswitch")
+        cb.add_metric([], 2 if st.get("killswitch") else (1 if st.get("circuit_broken") else 0))
+        yield cb
+        pv = GaugeMetricFamily("slr_position_value_usd", "Position value by pair", labels=["pair"])
+        for pair, v in (st.get("position_value_usd") or {}).items():
+            pv.add_metric([pair], float(v))
+        yield pv
+        pnl = GaugeMetricFamily("slr_pnl_usd", "Unrealized PnL by pair", labels=["pair"])
+        for pair, v in (st.get("pnl_usd") or {}).items():
+            pnl.add_metric([pair], float(v))
+        yield pnl
+        tt = CounterMetricFamily("slr_trades_total", "Executed trades by side", labels=["side"])
+        tt.add_metric(["BUY"], float(counters.get("trades_buy", 0)))
+        tt.add_metric(["SELL"], float(counters.get("trades_sell", 0)))
+        yield tt
+        # Gauge 而非 Counter：CounterMetricFamily 会强制 _total 后缀，
+        # dashboard expr 需与 slr_signals_checked 逐字一致（sed consensus_→slr_ 平移）
+        sc = GaugeMetricFamily("slr_signals_checked", "Signal checks performed (cumulative)")
+        sc.add_metric([], float(counters.get("signals_checked", 0)))
+        yield sc
+
+
+try:  # 测试 reload 时 REGISTRY 已有旧实例——旧 collector 同样读 STATE_FILE，幂等跳过即可
+    REGISTRY.register(StateCollector())
+except ValueError:
+    pass
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(REGISTRY), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/health")

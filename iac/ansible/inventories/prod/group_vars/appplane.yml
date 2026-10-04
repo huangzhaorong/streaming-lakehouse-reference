@@ -7,3 +7,92 @@ prometheus_data_dir: /data/prometheus
 grafana_data_dir: /data/grafana
 lancer_db_path: /data/lancer
 n8n_user_folder: /var/lib/n8n
+
+# 跨机地址（inventory 生成后可用）
+data_ip: "{{ hostvars[groups['dataplane'][0]].ansible_host }}"
+
+# Python 服务清单（python-service role 循环部署；env 值全部落 /etc/slr/<name>.env 0600）
+slr_python_services:
+  - name: poller
+    src: poller
+    health_port: 8000
+    env:
+      COINBASE_WS_URL: wss://ws-feed.exchange.coinbase.com
+      TRADING_PAIRS: "{{ trading_pairs }}"
+      IGGY_TOPIC: prices
+      IGGY_TOPIC_PARTITIONS: "3"
+      POLLER_METRICS_PORT: "8000"
+      IGGY_HOST: "{{ data_ip }}"
+      IGGY_TCP_PORT: "{{ iggy_tcp_port }}"
+      IGGY_USERNAME: "{{ iggy_root_username }}"
+      IGGY_PASSWORD: "{{ vault_iggy_password }}"
+      IGGY_STREAM: "{{ iggy_stream }}"
+  - name: bridge
+    src: bridge
+    health_port: 8001
+    env:
+      BRIDGE_METRICS_PORT: "8001"
+      BRIDGE_POLL_INTERVAL: "0.05"
+      IGGY_TOPIC: prices
+      IGGY_HOST: "{{ data_ip }}"
+      IGGY_TCP_PORT: "{{ iggy_tcp_port }}"
+      IGGY_USERNAME: "{{ iggy_root_username }}"
+      IGGY_PASSWORD: "{{ vault_iggy_password }}"
+      IGGY_STREAM: "{{ iggy_stream }}"
+  - name: lancer
+    src: lancer
+    health_port: 8003
+    state_dirs: ["{{ lancer_db_path }}"]
+    env:
+      LANCER_MODE: signal
+      LANCER_WINDOW_SIZE: "60"
+      LANCER_TOP_K: "5"
+      LANCER_SIMILARITY_THRESHOLD: "0.85"
+      LANCER_MIN_OUTCOME_PCT: "0.1"
+      LANCER_API_PORT: "8003"
+      LANCER_METRICS_PORT: "8004"
+      LANCER_DB_PATH: "{{ lancer_db_path }}"
+      LANCER_WAREHOUSE_PATH: "{{ jindofuse_mount }}/paimon/crypto.db/ohlcv_1m"
+      GRAFANA_URL: "http://localhost:{{ grafana_port }}"
+      GRAFANA_USER: admin
+      GRAFANA_PASSWORD: "{{ vault_grafana_admin_password }}"
+      IGGY_TOPIC: prices
+      IGGY_HOST: "{{ data_ip }}"
+      IGGY_TCP_PORT: "{{ iggy_tcp_port }}"
+      IGGY_USERNAME: "{{ iggy_root_username }}"
+      IGGY_PASSWORD: "{{ vault_iggy_password }}"
+      IGGY_STREAM: "{{ iggy_stream }}"
+  - name: lancer-indexer
+    src: lancer
+    mode: oneshot
+    timer: "hourly"
+    enabled: true
+    state_dirs: ["{{ lancer_db_path }}"]
+    env:
+      LANCER_MODE: indexer
+      LANCER_WINDOW_SIZE: "60"
+      LANCER_DB_PATH: "{{ lancer_db_path }}"
+      LANCER_WAREHOUSE_PATH: "{{ jindofuse_mount }}/paimon/crypto.db/ohlcv_1m"
+  - name: replay
+    src: replay
+    mode: oneshot
+    enabled: false   # 历史回放按需手动: systemctl start replay
+    env:
+      REPLAY_SPEED: "60"
+      REPLAY_METRICS_PORT: "8002"
+      REPLAY_WAREHOUSE_PATH: "{{ jindofuse_mount }}/iceberg/crypto/ticks/data"
+      IGGY_TOPIC: "{{ 'replay' }}"
+      IGGY_HOST: "{{ data_ip }}"
+      IGGY_TCP_PORT: "{{ iggy_tcp_port }}"
+      IGGY_USERNAME: "{{ iggy_root_username }}"
+      IGGY_PASSWORD: "{{ vault_iggy_password }}"
+      IGGY_STREAM: "{{ iggy_stream }}"
+  - name: query-api
+    src: services/query-api
+    health_port: "{{ query_api_port }}"
+    state_dirs: ["/var/lib/query-api"]
+    env:
+      QUERY_API_PORT: "{{ query_api_port }}"
+      QUERY_API_WAREHOUSE_PATH: "{{ jindofuse_mount }}/paimon/crypto.db"
+      QUERY_API_STATE_DIR: /var/lib/query-api
+      TRADING_PAIRS: "{{ trading_pairs }}"

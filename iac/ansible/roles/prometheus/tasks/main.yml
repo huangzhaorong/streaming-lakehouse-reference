@@ -1,0 +1,64 @@
+# prometheus v2.53.0（应用面；抓取本机 Python 服务 + 跨机 Flink TM metrics）
+- name: 下载 Prometheus {{ prometheus_version }}
+  ansible.builtin.get_url:
+    url: "https://github.com/prometheus/prometheus/releases/download/{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+    dest: "/tmp/prometheus-{{ prometheus_version }}.tar.gz"
+    mode: "0644"
+  register: prom_dl
+  until: prom_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包 + 符号链接
+  ansible.builtin.unarchive:
+    src: "/tmp/prometheus-{{ prometheus_version }}.tar.gz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+
+- name: /opt/prometheus 符号链接
+  ansible.builtin.file:
+    src: "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+    dest: /opt/prometheus
+    state: link
+
+- name: prometheus 用户与数据目录
+  ansible.builtin.user:
+    name: prometheus
+    system: true
+    shell: /sbin/nologin
+
+- name: 数据目录
+  ansible.builtin.file:
+    path: "{{ prometheus_data_dir }}"
+    state: directory
+    owner: prometheus
+    mode: "0755"
+
+- name: prometheus.yml（迁移自仓库 prometheus/prometheus.yml，目标改本机/跨机 IP）
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: /opt/prometheus/prometheus.yml
+    owner: prometheus
+    mode: "0644"
+  notify: reload prometheus
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: prometheus.service.j2
+    dest: /etc/systemd/system/prometheus.service
+    mode: "0644"
+  notify: restart prometheus
+
+- name: 启动并自启
+  ansible.builtin.systemd:
+    name: prometheus
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待 9090
+  ansible.builtin.wait_for:
+    port: "{{ prometheus_port }}"
+    host: 127.0.0.1
+    timeout: 60

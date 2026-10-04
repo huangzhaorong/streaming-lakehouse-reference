@@ -1,0 +1,80 @@
+# python-service — 通用 Python 单进程服务部署（vars 驱动，playbook 循环调用）
+# 入参 svc: {name, src(仓库相对目录), env(dict), mode(simple|oneshot), timer(可选 OnCalendar), enabled(默认 true)}
+- name: slr 系统用户（全部 Python 服务共用）
+  ansible.builtin.user:
+    name: slr
+    system: true
+    shell: /sbin/nologin
+    home: /opt/slr
+  run_once: true
+
+- name: 同步源码 {{ svc.src }} → /opt/slr/services/{{ svc.name }}
+  ansible.builtin.copy:
+    src: "../../../../{{ svc.src }}/"
+    dest: "/opt/slr/services/{{ svc.name }}/"
+    owner: slr
+    mode: "0755"
+  notify: "restart {{ svc.name }}"
+
+- name: venv + 依赖（uv，pypi 镜像）
+  ansible.builtin.shell: |
+    set -e
+    cd /opt/slr/services/{{ svc.name }}
+    /usr/local/bin/uv venv --python {{ python_version }} venv
+    VIRTUAL_ENV=venv /usr/local/bin/uv pip install -r requirements.txt --index-url {{ pip_index_url }}
+  args:
+    creates: "/opt/slr/services/{{ svc.name }}/venv/bin/python"
+  become_user: slr
+
+- name: 服务数据目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: slr
+    mode: "0755"
+  loop: "{{ svc.state_dirs | default([]) }}"
+
+- name: EnvironmentFile（0600，凭据由 vault 渲染）
+  ansible.builtin.template:
+    src: service.env.j2
+    dest: "/etc/slr/{{ svc.name }}.env"
+    owner: slr
+    mode: "0600"
+  notify: "restart {{ svc.name }}"
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: python-service.service.j2
+    dest: "/etc/systemd/system/{{ svc.name }}.service"
+    mode: "0644"
+  notify: "restart {{ svc.name }}"
+
+- name: systemd timer（oneshot 周期任务）
+  when: svc.timer is defined
+  ansible.builtin.template:
+    src: python-service.timer.j2
+    dest: "/etc/systemd/system/{{ svc.name }}.timer"
+    mode: "0644"
+
+- name: 启动并自启
+  when: svc.mode | default('simple') == 'simple' and svc.enabled | default(true)
+  ansible.builtin.systemd:
+    name: "{{ svc.name }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: oneshot — 仅安装不启动（手动/timer 触发）
+  when: svc.mode | default('simple') == 'oneshot'
+  ansible.builtin.systemd:
+    name: "{{ svc.name }}{{ '.timer' if svc.timer is defined else '.service' }}"
+    daemon_reload: true
+    enabled: "{{ svc.enabled | default(false) }}"
+    state: "{{ 'started' if (svc.enabled | default(false)) else 'stopped' }}"
+
+- name: 健康等待（可选 svc.health_port）
+  when: svc.health_port is defined and svc.enabled | default(true) and svc.mode | default('simple') == 'simple'
+  ansible.builtin.wait_for:
+    port: "{{ svc.health_port }}"
+    host: 127.0.0.1
+    timeout: 60

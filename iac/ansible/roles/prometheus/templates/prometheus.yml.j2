@@ -1,0 +1,36 @@
+# 迁移自仓库根 prometheus/prometheus.yml（compose 服务名 → 本机端口/跨机 IP）
+# 删除的 job：replay（oneshot 不常驻）、analyst/consensus（已由 n8n + query-api 取代）
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "bridge"
+    scrape_interval: 1s
+    static_configs:
+      - targets: ["localhost:8001"]
+
+  - job_name: "poller"
+    static_configs:
+      - targets: ["localhost:8000"]
+
+  - job_name: "flink"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["{{ data_ip }}:{{ flink_metrics_port }}"]
+
+  - job_name: "lancer"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["localhost:8004"]
+
+  - job_name: "query-api"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["localhost:{{ query_api_port }}"]
+
+  - job_name: "n8n"
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:{{ n8n_port }}"]

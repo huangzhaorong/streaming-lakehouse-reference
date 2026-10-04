@@ -1,0 +1,10 @@
+[Unit]
+Description=SLR {{ svc.name }} periodic run
+
+[Timer]
+OnCalendar={{ svc.timer }}
+Persistent=false
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=SLR reconciliation snapshot (Paimon balance → JSON via Flink SQL)
+After=flink-jobmanager.service jindofuse-warehouse.service
+
+[Service]
+Type=oneshot
+User=flink
+EnvironmentFile=/etc/slr/reconcile.env
+ExecStart=/bin/bash /opt/slr/scripts/reconcile-snapshot.sh

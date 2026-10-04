@@ -1,0 +1,19 @@
+[Unit]
+Description=Apache Flink {{ flink_version }} JobManager
+After=network-online.target zookeeper.service
+Wants=network-online.target
+Requires=zookeeper.service
+
+[Service]
+Type=simple
+User=flink
+Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+Environment=HADOOP_CONF_DIR=/opt/flink/conf/hadoop
+Environment=FLINK_ENV_JAVA_OPTS=-Dfile.encoding=UTF-8
+ExecStart=/opt/flink/bin/jobmanager.sh start-foreground
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,136 @@
+# flink 1.20.3 standalone（JM+TM 同机）— OSS-HDFS via JindoSDK（G1 金丝雀见 runbook）
+- name: 下载 Flink {{ flink_version }}
+  ansible.builtin.get_url:
+    url: "{{ apache_archive_mirror }}/flink/flink-{{ flink_version }}/flink-{{ flink_version }}-bin-scala_{{ flink_scala_suffix }}.tgz"
+    dest: "/tmp/flink-{{ flink_version }}.tgz"
+    mode: "0644"
+  register: flink_dl
+  until: flink_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包到 /opt
+  ansible.builtin.unarchive:
+    src: "/tmp/flink-{{ flink_version }}.tgz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/flink-{{ flink_version }}"
+
+- name: /opt/flink 符号链接
+  ansible.builtin.file:
+    src: "/opt/flink-{{ flink_version }}"
+    dest: /opt/flink
+    state: link
+
+- name: flink 系统用户
+  ansible.builtin.user:
+    name: flink
+    system: true
+    shell: /sbin/nologin
+    home: /opt/flink
+
+- name: 日志目录
+  ansible.builtin.file:
+    path: /var/log/flink
+    state: directory
+    owner: flink
+    group: flink
+    mode: "0755"
+
+- name: 同步仓库脚本与 SQL 到 /opt/slr
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /opt/slr/
+    mode: "0755"
+  loop:
+    - ../../../../scripts
+    - ../../../../flink
+
+- name: 下载 connector jars（download-jars.sh，SHA-256 校验，幂等）
+  ansible.builtin.command: bash /opt/slr/scripts/download-jars.sh
+  register: jars_out
+  changed_when: "'Downloading' in jars_out.stdout"
+
+- name: jars 装配到 /opt/flink/lib（幂等覆盖）
+  ansible.builtin.shell: |
+    set -e
+    cp -f /opt/slr/jars/*.jar /opt/flink/lib/
+    if ls /opt/slr/jars/native/*.so >/dev/null 2>&1; then
+      cp -f /opt/slr/jars/native/*.so /usr/lib64/ && ldconfig
+    fi
+    # ★ jindo-flink 与 flink-oss-fs-hadoop 互斥（JindoSDK 官方要求，G1 前置防御）
+    find /opt/flink/lib -name 'flink-oss-fs-hadoop*' -delete
+    test -f /opt/flink/lib/jindo-flink-{{ jindosdk_version }}-full.jar
+  changed_when: false  # 覆盖拷贝幂等；缺 jar 由 test -f 硬失败拦截
+
+- name: flink-conf.yaml
+  ansible.builtin.template:
+    src: flink-conf.yaml.j2
+    dest: /opt/flink/conf/flink-conf.yaml
+    owner: flink
+    mode: "0644"
+  notify: restart flink
+
+- name: hadoop conf 目录 + core-site.xml（Iceberg HadoopFileIO 用）
+  ansible.builtin.template:
+    src: core-site.xml.j2
+    dest: /opt/flink/conf/hadoop/core-site.xml
+    owner: flink
+    mode: "0644"
+  notify: restart flink
+
+- name: 渲染 Flink SQL（warehouse→OSS-HDFS，iggy/fluss host→本机；幂等覆盖）
+  ansible.builtin.shell: |
+    SLR_WAREHOUSE_BASE="{{ slr_warehouse_base }}" \
+    SLR_IGGY_HOST=127.0.0.1 \
+    SLR_FLUSS_BOOTSTRAP=127.0.0.1:{{ fluss_coordinator_port }} \
+    bash /opt/slr/scripts/render-sql.sh /opt/slr/flink/sql /opt/flink/sql
+  changed_when: false
+
+- name: systemd units（JM/TM）
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: flink-jobmanager.service.j2, dest: flink-jobmanager.service }
+    - { src: flink-taskmanager.service.j2, dest: flink-taskmanager.service }
+  notify: restart flink
+
+- name: 启动并自启 JM → TM
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - flink-jobmanager
+    - flink-taskmanager
+
+- name: 等待 Flink REST 8081
+  ansible.builtin.wait_for:
+    port: "{{ flink_ui_port }}"
+    host: 127.0.0.1
+    timeout: 120
+
+- name: reconcile 环境文件
+  ansible.builtin.template:
+    src: reconcile.env.j2
+    dest: /etc/slr/reconcile.env
+    mode: "0600"
+
+- name: reconcile-snapshot service + timer（5min，替代宿主 cron）
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: reconcile-snapshot.service.j2, dest: reconcile-snapshot.service }
+    - { src: reconcile-snapshot.timer.j2, dest: reconcile-snapshot.timer }
+
+- name: 启用 reconcile timer（playbook_jobs 里 seed 完成后才真正有数据，空表时脚本自跳过）
+  ansible.builtin.systemd:
+    name: reconcile-snapshot.timer
+    daemon_reload: true
+    enabled: true
+    state: started

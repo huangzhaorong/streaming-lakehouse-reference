@@ -1,0 +1,44 @@
+# ============================================================
+# Flink {{ flink_version }} — SLR 数据面（JM+TM 同机 standalone）
+# OSS-HDFS 经 JindoSDK（jindo-flink full jar）；lib 内禁止 flink-oss-fs-hadoop（互斥）
+# URI 规范：纯桶名 oss://{{ slr_bucket }}/... + 区域级 dls endpoint
+#（Paimon 拒绝 bucket 内嵌 authority——adtrader 金丝雀实证）
+# ============================================================
+
+jobmanager.rpc.address: 127.0.0.1
+jobmanager.memory.process.size: {{ flink_jm_memory | default('4g') }}
+taskmanager.memory.process.size: {{ flink_tm_memory | default('16g') }}
+taskmanager.numberOfTaskSlots: {{ flink_task_slots }}
+parallelism.default: 1
+
+rest.address: 0.0.0.0
+rest.port: {{ flink_ui_port }}
+
+# --- state / checkpoint / HA（全部落 OSS-HDFS）---
+state.backend.type: hashmap
+state.checkpoints.dir: oss://{{ slr_bucket }}/flink/checkpoints
+state.savepoints.dir: oss://{{ slr_bucket }}/flink/savepoints
+execution.checkpointing.interval: 60s
+high-availability: zookeeper
+high-availability.zookeeper.quorum: 127.0.0.1:{{ zk_port }}
+high-availability.cluster-id: /streaming-lakehouse
+high-availability.storageDir: oss://{{ slr_bucket }}/flink/ha
+
+# --- OSS-HDFS（JindoSDK；RAM role 免 AK，回退见 vault oss_access_key_*）---
+fs.oss.endpoint: {{ oss_dls_endpoint }}
+fs.oss.impl: com.aliyun.jindodata.oss.JindoOssFileSystem
+fs.AbstractFileSystem.oss.impl: com.aliyun.jindodata.oss.OSS
+fs.oss.provider.endpoint: ECS_ROLE
+fs.oss.provider.format: JSON
+{% if vault_oss_access_key_id is defined and vault_oss_access_key_id | length > 0 %}
+# R2 回退已启用：ECS_ROLE 失败时注释掉上方 provider 两行，改用 AK
+fs.oss.accessKeyId: {{ vault_oss_access_key_id }}
+fs.oss.accessKeySecret: {{ vault_oss_access_key_secret }}
+{% endif %}
+
+# --- metrics（Prometheus 从应用面跨机抓取）---
+metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+metrics.reporter.prom.port: {{ flink_metrics_port }}
+
+# --- 日志目录 ---
+env.log.dir: /var/log/flink

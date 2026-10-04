@@ -165,9 +165,12 @@ function main() {
     updateEquity(st, px, cfg, new Date().toISOString().slice(0, 10));
     st.equity_cycle = cycleTs;
   }
+  st.last_prices = st.last_prices || {};
   return items.map((item) => {
     const d = item.json; // BuildPrompt/ParseSentiment 输出: {pair, cycle_ts, signal, sentiment, narrative}
     const priceInfo = prices[d.pair] || { price: 0, ts: 0 };
+    if (priceInfo.price > 0) st.last_prices[d.pair] = priceInfo.price;
+    st.signals_checked = (st.signals_checked || 0) + 1; // slr_signals_checked 指标源
     const r = decide(cfg, cycle, st, d.pair, d.signal, priceInfo, d.sentiment);
     return { json: { ...r, narrative: d.narrative || '', price: priceInfo.price, cycle_ts: cycleTs, cycle_count: d.cycle_count } };
   });

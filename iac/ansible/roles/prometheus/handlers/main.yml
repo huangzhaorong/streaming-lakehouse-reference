@@ -1,0 +1,11 @@
+- name: restart prometheus
+  ansible.builtin.systemd:
+    name: prometheus
+    daemon_reload: true
+    state: restarted
+
+- name: reload prometheus
+  ansible.builtin.uri:
+    url: "http://localhost:{{ prometheus_port }}/-/reload"
+    method: POST
+  failed_when: false

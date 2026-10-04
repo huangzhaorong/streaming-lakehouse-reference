@@ -1,0 +1,8 @@
+- name: restart flink
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    state: restarted
+  loop:
+    - flink-jobmanager
+    - flink-taskmanager

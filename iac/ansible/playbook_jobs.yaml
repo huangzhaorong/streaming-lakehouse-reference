@@ -1,0 +1,104 @@
+# Flink SQL 作业提交（顺序重要；seed-balance 一次性带守卫）
+# 前置：playbook_dataplane 完成、G1/G2/G3 金丝雀通过（runbook Phase 2）
+# 用法：ansible-playbook playbook_jobs.yaml
+- name: SLR Flink jobs submission
+  hosts: dataplane
+  become: true
+  become_user: flink
+  vars:
+    sql_dir: /opt/flink/sql
+    seed_marker: /data/.slr-seed-done
+    env_sh: &env_sh |
+      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+      export HADOOP_CONF_DIR=/opt/flink/conf/hadoop
+  tasks:
+    - name: 渲染 SQL 就位校验
+      ansible.builtin.stat:
+        path: "{{ sql_dir }}/lakehouse-tier.sql"
+      register: sql_stat
+      become_user: root
+    - name: 未渲染则失败
+      ansible.builtin.fail:
+        msg: "{{ sql_dir }} 无渲染产物——先跑 playbook_dataplane（flink role 渲染 SQL）"
+      when: not sql_stat.stat.exists
+
+    # 1) DDL + 湖仓流作业（Paimon ohlcv_1m + Iceberg ticks）
+    - name: 提交 lakehouse-tier
+      ansible.builtin.shell: |
+        {{ env_sh }}
+        /opt/flink/bin/sql-client.sh embedded -f {{ sql_dir }}/lakehouse-tier.sql
+      register: submit_lakehouse
+      changed_when: true
+
+    # 2) Fluss 热层
+    - name: 提交 fluss-hot-tier
+      ansible.builtin.shell: |
+        {{ env_sh }}
+        /opt/flink/bin/sql-client.sh embedded -f {{ sql_dir }}/fluss-hot-tier.sql
+      changed_when: true
+
+    # 3) seed-balance（一次性！Paimon aggregation 表重复 INSERT 会重复累加）
+    - name: seed 守卫——检查标记与 balance 表
+      ansible.builtin.shell: |
+        {{ env_sh }}
+        if [ -f {{ seed_marker }} ]; then echo GUARD_MARKER; exit 0; fi
+        cat > /tmp/guard.sql <<'EOSQL'
+        SET 'execution.runtime-mode' = 'batch';
+        SET 'sql-client.execution.result-mode' = 'tableau';
+        SET 'classloader.parent-first-patterns.additional' = 'org.apache.paimon.;org.apache.hadoop.;com.codahale.';
+        CREATE CATALOG paimon_catalog WITH ('type' = 'paimon', 'warehouse' = '{{ slr_warehouse_base }}/paimon');
+        SELECT COUNT(*) AS c FROM paimon_catalog.crypto.balance;
+        EOSQL
+        /opt/flink/bin/sql-client.sh embedded -f /tmp/guard.sql 2>/dev/null || echo GUARD_EMPTY_TABLE
+      register: seed_guard
+      changed_when: false
+
+    - name: 解析守卫输出的 balance 行数
+      ansible.builtin.set_fact:
+        seed_count: "{{ seed_guard.stdout | regex_search('\\|\\s*(\\d+)\\s*\\|', '\\1') }}"
+
+    - name: 已 seed 且无标记时告警（COUNT>0，人工复核——重复 INSERT 会重复累加）
+      ansible.builtin.debug:
+        msg: "balance 表已有数据但 {{ seed_marker }} 不存在——跳过 seed，请人工复核（Paimon aggregation 语义）"
+      when: >
+        'GUARD_MARKER' not in seed_guard.stdout and
+        seed_count | length > 0 and (seed_count | first | int) > 0
+
+    - name: 执行 seed（仅 balance 表不存在或为空、且无标记时）
+      ansible.builtin.shell: |
+        {{ env_sh }}
+        /opt/flink/bin/sql-client.sh embedded -f {{ sql_dir }}/seed-balance.sql
+        touch {{ seed_marker }}
+      when: >
+        'GUARD_MARKER' not in seed_guard.stdout and
+        (seed_count | length == 0 or (seed_count | first | int) == 0)
+      changed_when: true
+
+    # 4) 清算流作业（依赖 seed 建出的 balance/trades 表）
+    - name: 提交 clearing-house
+      ansible.builtin.shell: |
+        {{ env_sh }}
+        /opt/flink/bin/sql-client.sh embedded -f {{ sql_dir }}/clearing-house.sql
+      changed_when: true
+
+    # 5) 验证：3 个流作业 RUNNING
+    - name: 等待并核对作业状态
+      ansible.builtin.shell: |
+        sleep 30
+        curl -s http://localhost:{{ flink_ui_port }}/jobs/overview | python3 -c "
+        import sys, json
+        jobs = json.load(sys.stdin)['jobs']
+        running = [j['name'] for j in jobs if j['state'] == 'RUNNING']
+        print(f'RUNNING={len(running)}: {running}')
+        assert len(running) >= 3, '期望 ≥3 个 RUNNING 流作业'
+        "
+      become_user: root
+      register: jobs_check
+      changed_when: false
+      retries: 3
+      delay: 20
+      until: jobs_check.rc == 0
+
+    - name: 结果
+      ansible.builtin.debug:
+        msg: "{{ jobs_check.stdout }}"

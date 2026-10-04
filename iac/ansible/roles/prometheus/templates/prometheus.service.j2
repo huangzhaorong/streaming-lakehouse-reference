@@ -1,0 +1,19 @@
+[Unit]
+Description=Prometheus {{ prometheus_version }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+ExecStart=/opt/prometheus/prometheus \
+  --config.file=/opt/prometheus/prometheus.yml \
+  --storage.tsdb.path={{ prometheus_data_dir }} \
+  --storage.tsdb.retention.time=7d \
+  --web.listen-address=0.0.0.0:{{ prometheus_port }}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

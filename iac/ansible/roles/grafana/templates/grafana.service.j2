@@ -1,0 +1,17 @@
+[Unit]
+Description=Grafana {{ grafana_version }}
+After=network-online.target prometheus.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grafana
+EnvironmentFile=/etc/slr/grafana.env
+WorkingDirectory=/opt/grafana
+ExecStart=/opt/grafana/bin/grafana server --homepath /opt/grafana
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

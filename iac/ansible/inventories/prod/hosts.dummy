@@ -1,0 +1,10 @@
+# 仅供 --syntax-check 本地校验（真实 hosts 由 generate-inventory.sh 生成，gitignored）
+[dataplane]
+ecs-data-01 ansible_host=127.0.0.1 ansible_user=root
+
+[appplane]
+ecs-app-01 ansible_host=127.0.0.2 ansible_user=root
+
+[cluster:children]
+dataplane
+appplane

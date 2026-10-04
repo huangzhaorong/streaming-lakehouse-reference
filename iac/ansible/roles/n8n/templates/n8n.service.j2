@@ -1,0 +1,16 @@
+[Unit]
+Description=n8n {{ n8n_version }} (SLR trading decision engine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n8n
+EnvironmentFile=/etc/slr/n8n.env
+ExecStart=/opt/node/bin/n8n start
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

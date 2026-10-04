@@ -128,13 +128,29 @@ if (d.action === 'BUY' && order) {
 } else if (d.action === 'BLOCKED' && d.trade) {
   st.trade_log.push({ ...d.trade, timestamp: Date.now() / 1000 });
 }
+if (d.action === 'BUY') st.trades_buy = (st.trades_buy || 0) + 1;
+if (d.action === 'SELL') st.trades_sell = (st.trades_sell || 0) + 1;
 if (st.trade_log.length > 200) st.trade_log = st.trade_log.slice(-200);
 st.updated_at = Date.now() / 1000;
+// 展示指标（query-api /metrics 转 Prometheus，dashboard 用）：持仓市值/PnL 按最后已知价
+const positionValue = {}, pnl = {};
+for (const [pair, pos] of Object.entries(st.positions || {})) {
+  if (pos.quantity > 0) {
+    const px = (st.last_prices || {})[pair] ?? pos.entry_price;
+    positionValue[pair] = pos.quantity * px;
+    pnl[pair] = (px - pos.entry_price) * pos.quantity;
+  }
+}
 return [{ json: {
   cycle_count: st.cycle_count || 0,
   state: {
     positions: st.positions, cash: st.cash, killswitch: !!st.killswitch,
     circuit_broken: !!st.circuit_broken, day_baseline: st.day_baseline, equity: st.equity,
+    counters: {
+      trades_buy: st.trades_buy || 0, trades_sell: st.trades_sell || 0,
+      signals_checked: st.signals_checked || 0,
+    },
+    position_value_usd: positionValue, pnl_usd: pnl,
     trade_log: st.trade_log.slice(-50), updated_at: st.updated_at,
   },
 } }];

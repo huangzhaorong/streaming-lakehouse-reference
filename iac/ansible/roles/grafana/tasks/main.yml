@@ -1,0 +1,103 @@
+# grafana 11.1.0（dashboards/datasources 已自仓库根迁入本 role files/ 并完成 URL/指标名修正）
+- name: 下载 Grafana {{ grafana_version }}
+  ansible.builtin.get_url:
+    url: "https://dl.grafana.com/oss/release/grafana-{{ grafana_version }}.linux-amd64.tar.gz"
+    dest: "/tmp/grafana-{{ grafana_version }}.tar.gz"
+    mode: "0644"
+  register: gf_dl
+  until: gf_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包到 /opt
+  ansible.builtin.unarchive:
+    src: "/tmp/grafana-{{ grafana_version }}.tar.gz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/grafana-v{{ grafana_version }}"
+
+- name: /opt/grafana 符号链接
+  ansible.builtin.file:
+    src: "/opt/grafana-v{{ grafana_version }}"
+    dest: /opt/grafana
+    state: link
+
+- name: grafana 用户与数据目录
+  ansible.builtin.user:
+    name: grafana
+    system: true
+    shell: /sbin/nologin
+
+- name: 目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: grafana
+    mode: "0755"
+  loop:
+    - "{{ grafana_data_dir }}"
+    - "{{ grafana_data_dir }}/dashboards"
+    - /opt/grafana/conf/provisioning/datasources
+    - /opt/grafana/conf/provisioning/dashboards
+
+- name: infinity 插件（在线装；离线回退见 runbook——预下载 zip 进 artifacts 桶）
+  ansible.builtin.command: >
+    /opt/grafana/bin/grafana-cli
+    --pluginsDir /opt/grafana/plugins
+    plugins install yesoreyeram-infinity-datasource
+  args:
+    creates: /opt/grafana/plugins/yesoreyeram-infinity-datasource
+  notify: restart grafana
+
+- name: provisioning — datasources
+  ansible.builtin.copy:
+    src: "datasources/{{ item }}"
+    dest: "/opt/grafana/conf/provisioning/datasources/{{ item }}"
+    owner: grafana
+    mode: "0644"
+  loop: [prometheus.yml, infinity.yml]
+  notify: restart grafana
+
+- name: provisioning — dashboard provider
+  ansible.builtin.copy:
+    src: dashboards/dashboard.yml
+    dest: /opt/grafana/conf/provisioning/dashboards/dashboard.yml
+    owner: grafana
+    mode: "0644"
+  notify: restart grafana
+
+- name: dashboards（trading/live-ticks 已改 query-api :8009 与 slr_* 指标名）
+  ansible.builtin.copy:
+    src: "dashboards/{{ item }}"
+    dest: "{{ grafana_data_dir }}/dashboards/{{ item }}"
+    owner: grafana
+    mode: "0644"
+  loop: [live-ticks.json, flink-pipeline.json, replay.json, lancer.json, trading.json]
+  notify: restart grafana
+
+- name: EnvironmentFile（admin 密码来自 vault）
+  ansible.builtin.template:
+    src: grafana.env.j2
+    dest: /etc/slr/grafana.env
+    mode: "0600"
+  notify: restart grafana
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: grafana.service.j2
+    dest: /etc/systemd/system/grafana.service
+    mode: "0644"
+  notify: restart grafana
+
+- name: 启动并自启
+  ansible.builtin.systemd:
+    name: grafana
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待 3001
+  ansible.builtin.wait_for:
+    port: "{{ grafana_port }}"
+    host: 127.0.0.1
+    timeout: 90

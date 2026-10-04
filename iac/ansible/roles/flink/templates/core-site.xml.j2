@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 最小 Hadoop 配置：Iceberg HadoopFileIO 经 hadoop-client-api 识别 oss://（键与 flink-conf 一致） -->
+<configuration>
+  <property><name>fs.oss.endpoint</name><value>{{ oss_dls_endpoint }}</value></property>
+  <property><name>fs.oss.impl</name><value>com.aliyun.jindodata.oss.JindoOssFileSystem</value></property>
+  <property><name>fs.AbstractFileSystem.oss.impl</name><value>com.aliyun.jindodata.oss.OSS</value></property>
+  <property><name>fs.oss.provider.endpoint</name><value>ECS_ROLE</value></property>
+  <property><name>fs.oss.provider.format</name><value>JSON</value></property>
+</configuration>
