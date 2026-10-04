@@ -1,0 +1,45 @@
+# 复制为 terraform.tfvars 后填写（terraform.tfvars 已被 .gitignore 排除——含白名单/公钥）
+# 凭证不在此文件：ALICLOUD_ACCESS_KEY/SECRET 环境变量或 aliyun CLI profile
+
+region      = "cn-beijing"
+vpc_name    = "<现有 VPC 名称>"          # data source 只读引用，不新建
+vswitch_cidr = "<现有交换机 CIDR>"        # 如 "10.18.0.0/24"，两台 ECS 落此交换机
+
+# SSH 公网白名单（唯一公网入向）：办公网出口 IP /32
+admin_cidrs = ["203.0.113.10/32"]
+# 可选 UI 直连白名单（Grafana 3001 / n8n 5678 / Flink 8081 / Prometheus 9090）
+# 默认留空 = 全走 SSH 隧道（推荐）
+ui_cidrs    = []
+
+ssh_public_key = file("~/.ssh/id_ed25519.pub")
+
+# 桶名（全局唯一；OSS-HDFS 开通为控制台带外步骤，见 runbook Phase 1）
+oss_bucket_name       = "slr-lakehouse-prod"
+artifacts_bucket_name = "slr-artifacts-prod"
+ram_role_name         = "slr-oss-role"
+
+# 两台分层（规格缺货时同核数替代：g8i→g7→c7，替代后在此注明）
+slr_instances = {
+  dataplane = {
+    instance_type               = "ecs.g8i.2xlarge" # 8C32G：Iggy/ZK/Fluss×2/Flink JM+TM(8 slot)
+    count                       = 1
+    disk_size                   = 40
+    data_disk_size              = 200               # Fluss data/remote + Iggy + ZK
+    data_disk_performance_level = "PL1"
+    private_ips                 = ["<vswitch 内空闲 IP，如 10.18.0.201>"]
+    hostnames                   = ["ecs-data-01"]
+    hostname_prefix             = "ecs-data"
+    internet_max_bandwidth_out  = 100               # 装机期下载；跑稳后可调 0（无出向需求）
+  }
+  appplane = {
+    instance_type               = "ecs.g8i.xlarge"  # 4C16G：Python 服务/n8n/query-api/Prometheus/Grafana
+    count                       = 1
+    disk_size                   = 40
+    data_disk_size              = 100               # Prometheus TSDB(7d) + Grafana + LanceDB + n8n SQLite
+    data_disk_performance_level = "PL0"
+    private_ips                 = ["<vswitch 内空闲 IP，如 10.18.0.202>"]
+    hostnames                   = ["ecs-app-01"]
+    hostname_prefix             = "ecs-app"
+    internet_max_bandwidth_out  = 100               # Coinbase WSS + DashScope 长期需要
+  }
+}

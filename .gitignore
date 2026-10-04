@@ -9,3 +9,7 @@ dist/
 services/query-api/_deps/
 services/query-api/venv/
 services/query-api/.venv/
+iac/terraform/environments/prod/terraform.tfvars
+.terraform/
+*.tfstate*
+tfplan*

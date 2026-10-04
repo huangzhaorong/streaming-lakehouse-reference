@@ -1,0 +1,16 @@
+# ============================================================
+# 由 Terraform 自动生成 — 请勿手动修改（generate-inventory.sh prod 覆盖再生）
+# 生成时间: ${timestamp}
+# 手动内容位置：group_vars/（版本锁与凭证引用）、host_vars/（实测设备名）
+# ★ 顺序即语义：private_ips/hostnames 列表顺序，永不重排，只在末尾追加
+# ============================================================
+
+[dataplane]
+${dataplane}
+
+[appplane]
+${appplane}
+
+[cluster:children]
+dataplane
+appplane
