@@ -2,22 +2,26 @@
 # Reconciliation snapshot — queries Paimon via Flink SQL and writes JSON
 # to the flink-warehouse volume for the consensus engine to read.
 #
-# Run periodically: */5 * * * * /path/to/reconcile-snapshot.sh
+# Run via systemd timer on the dataplane host (reconcile-snapshot.timer, every 5min)
 # Or manually: ./scripts/reconcile-snapshot.sh
+# Env: FLINK_HOME (default /opt/flink), SLR_PAIMON_WAREHOUSE (default oss://slr-lakehouse-prod/warehouse/paimon),
+#      RECONCILE_DEST (default /mnt/warehouse/paimon/crypto.db — JindoFuse rw mount)
 
 set -euo pipefail
 
-DEST="/opt/flink/warehouse/paimon/crypto.db"
+FLINK_HOME="${FLINK_HOME:-/opt/flink}"
+SLR_PAIMON_WAREHOUSE="${SLR_PAIMON_WAREHOUSE:-oss://slr-lakehouse-prod/warehouse/paimon}"
+DEST="${RECONCILE_DEST:-/mnt/warehouse/paimon/crypto.db}"
 TMPOUT="/tmp/reconcile_output.txt"
 
 BALANCE_SQL="SET 'execution.runtime-mode' = 'batch';
 SET 'sql-client.execution.result-mode' = 'tableau';
 SET 'classloader.parent-first-patterns.additional' = 'org.apache.paimon.;org.apache.hadoop.;com.codahale.';
-CREATE CATALOG paimon_catalog WITH ('type' = 'paimon', 'warehouse' = '/opt/flink/warehouse/paimon');
+CREATE CATALOG paimon_catalog WITH ('type' = 'paimon', 'warehouse' = '${SLR_PAIMON_WAREHOUSE}');
 SELECT currency, amount FROM paimon_catalog.crypto.balance LIMIT 100;"
 
 # Run query — allow up to 90s for JVM startup + query
-echo "$BALANCE_SQL" | docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded 2>/dev/null > "$TMPOUT" || true
+echo "$BALANCE_SQL" | "${FLINK_HOME}/bin/sql-client.sh" embedded 2>/dev/null > "$TMPOUT" || true
 
 # Parse the tableau output: extract data rows between 2nd and 3rd +--- separators
 balance_json=$(python3 -c "
@@ -41,7 +45,10 @@ print(json.dumps(result))
 
 # Write balance file if we got data
 if [ -n "$balance_json" ] && [ "$balance_json" != "{}" ]; then
-    echo "$balance_json" | docker exec -i jobmanager bash -c "cat > ${DEST}/reconcile_balance.json" 2>/dev/null
+    # 原子写（tmp+mv）到 fuse 挂载的 warehouse，避免读方看到半截 JSON
+    mkdir -p "$DEST"
+    printf '%s\n' "$balance_json" > "${DEST}/.reconcile_balance.json.tmp"
+    mv -f "${DEST}/.reconcile_balance.json.tmp" "${DEST}/reconcile_balance.json"
     echo "$(date '+%H:%M:%S') Balance: $balance_json"
 else
     echo "$(date '+%H:%M:%S') No balance data — skipped"
