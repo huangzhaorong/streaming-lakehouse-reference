@@ -6,3 +6,6 @@ jars/*.jar
 .idea
 .superpowers/
 dist/
+services/query-api/_deps/
+services/query-api/venv/
+services/query-api/.venv/
