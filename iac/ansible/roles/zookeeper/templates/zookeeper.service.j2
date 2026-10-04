@@ -1,0 +1,15 @@
+[Unit]
+Description=Apache ZooKeeper {{ zookeeper_version }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+ExecStart=/opt/zookeeper/bin/zkServer.sh start-foreground /opt/zookeeper/conf/zoo.cfg
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

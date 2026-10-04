@@ -13,3 +13,8 @@ iac/terraform/environments/prod/terraform.tfvars
 .terraform/
 *.tfstate*
 tfplan*
+iac/ansible/.vault_pass
+iac/ansible/inventories/prod/vault.yml
+iac/ansible/inventories/prod/hosts
+iac/ansible/inventories/prod/hosts.*.bak
+iac/terraform/environments/prod/.terraform/

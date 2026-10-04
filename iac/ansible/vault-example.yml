@@ -1,0 +1,12 @@
+# 复制为 inventories/prod/vault.yml 后填真值并加密：
+#   ansible-vault encrypt inventories/prod/vault.yml
+# 编辑：ansible-vault edit inventories/prod/vault.yml
+# vault_password_file 见 ansible.cfg（.vault_pass，600 权限，已 gitignore）
+
+vault_iggy_password: "CHANGE_ME"            # Iggy root 密码（iggy role EnvironmentFile）
+vault_grafana_admin_password: "CHANGE_ME"   # Grafana admin（provisioning + n8n 注解凭据）
+vault_n8n_encryption_key: "CHANGE_ME"       # n8n credentials 加密 key（import:credentials 与运行实例必须同 key）
+vault_dashscope_api_key: "CHANGE_ME"        # 百炼 DashScope API key（渲染进 n8n credential JSON）
+# R2 回退（JVM 层 ECS_ROLE 免 AK 失败时启用；主路径不需要）：
+# vault_oss_access_key_id: ""
+# vault_oss_access_key_secret: ""

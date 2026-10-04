@@ -1,0 +1,12 @@
+# 数据面（ecs-data-01）：Iggy / ZooKeeper / Fluss / Flink JM+TM
+jindofuse_readonly: false          # reconcile-snapshot 写 reconcile_*.json 需要 rw
+jindofuse_extra_args: ""
+
+# 数据盘（200G ESSD PL1）：实施首日 lsblk 实测设备名回填 host_vars（禁 auto-detect，adtrader D32 教训）
+# host_vars/ecs-data-01.yml → slr_data_disk_device: /dev/vdb
+
+flink_task_slots: 8
+fluss_data_dir: /data/fluss/data
+fluss_remote_dir: /data/fluss/remote
+iggy_data_dir: /data/iggy
+zookeeper_data_dir: /data/zookeeper

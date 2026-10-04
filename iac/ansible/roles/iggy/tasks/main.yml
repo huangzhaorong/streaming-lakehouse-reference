@@ -1,0 +1,78 @@
+# iggy 0.7.0 — 二进制为 docker 镜像提取件（官方无发行资产），
+# 由 scripts/extract-iggy-binary.sh 产出并上传 artifacts 桶（sha256 钉死）。
+- name: iggy_artifact_sha256 必须已回填
+  ansible.builtin.assert:
+    that: iggy_artifact_sha256 | length > 0
+    fail_msg: "iggy_artifact_sha256 为空——先运行 scripts/extract-iggy-binary.sh，将实测 sha256 回填 group_vars/all.yml"
+
+- name: 下载 iggy 提取件
+  ansible.builtin.get_url:
+    url: "{{ iggy_artifact_url }}"
+    dest: "/tmp/iggy-{{ iggy_version }}.tar.gz"
+    checksum: "sha256:{{ iggy_artifact_sha256 }}"
+    mode: "0644"
+  register: iggy_dl
+  until: iggy_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 安装目录 /opt/iggy
+  ansible.builtin.file:
+    path: /opt/iggy
+    state: directory
+    mode: "0755"
+
+- name: 解包（iggy-server / iggy CLI / configs）
+  ansible.builtin.unarchive:
+    src: "/tmp/iggy-{{ iggy_version }}.tar.gz"
+    dest: /opt/iggy
+    remote_src: true
+    mode: "0755"
+
+- name: 数据目录
+  ansible.builtin.file:
+    path: "{{ iggy_data_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: server.toml 数据目录指向 /data/iggy（提取件默认 local_data 相对路径）
+  ansible.builtin.replace:
+    path: /opt/iggy/configs/server.toml
+    regexp: '^data_dir\s*=.*$'
+    replace: 'data_dir = "{{ iggy_data_dir }}"'
+  notify: restart iggy
+  # 若提取件 toml 无 data_dir 键（布局差异），部署期在此追加 [system] 段——runbook G2 前核对
+
+- name: EnvironmentFile（凭据来自 vault，不落仓库）
+  ansible.builtin.template:
+    src: iggy.env.j2
+    dest: /etc/iggy/iggy.env
+    owner: root
+    mode: "0600"
+  notify: restart iggy
+
+- name: systemd unit（memlock/SYS_NICE = compose cap_add 等价物）
+  ansible.builtin.template:
+    src: iggy.service.j2
+    dest: /etc/systemd/system/iggy.service
+    mode: "0644"
+  notify: restart iggy
+
+- name: 启动并自启
+  ansible.builtin.systemd:
+    name: iggy
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待 HTTP 3000
+  ansible.builtin.wait_for:
+    port: "{{ iggy_http_port }}"
+    host: 127.0.0.1
+    timeout: 60
+
+- name: ping 验证
+  ansible.builtin.command: "/opt/iggy/iggy ping --address {{ inventory_hostname }}:{{ iggy_tcp_port }}"
+  register: iggy_ping
+  changed_when: false
+  failed_when: iggy_ping.rc != 0

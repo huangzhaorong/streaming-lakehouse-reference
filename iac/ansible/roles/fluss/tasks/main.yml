@@ -1,0 +1,93 @@
+# fluss 0.9.0-incubating — coordinator + tablet 同机（单节点热层，数据本地盘可重建）
+# 配置键承 adtrader 2026-10-01 真机 smoke 实证（bind.listeners/zookeeper.*/data.dir）
+- name: 下载 Fluss {{ fluss_version }}
+  ansible.builtin.get_url:
+    url: "{{ apache_archive_mirror }}/incubator/fluss/fluss-{{ fluss_version }}/fluss-{{ fluss_version }}-bin.tgz"
+    dest: "/tmp/fluss-{{ fluss_version }}-bin.tgz"
+    mode: "0644"
+  register: fluss_dl
+  until: fluss_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包到 /opt
+  ansible.builtin.unarchive:
+    src: "/tmp/fluss-{{ fluss_version }}-bin.tgz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/fluss-{{ fluss_version }}"
+
+- name: /opt/fluss 符号链接
+  ansible.builtin.file:
+    src: "/opt/fluss-{{ fluss_version }}"
+    dest: /opt/fluss
+    state: link
+
+- name: fluss 系统用户
+  ansible.builtin.user:
+    name: fluss
+    system: true
+    shell: /sbin/nologin
+    home: /opt/fluss
+
+- name: 数据目录（持久化——修掉 compose 时代 /tmp 易失问题）
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: fluss
+    group: fluss
+    mode: "0755"
+  loop:
+    - "{{ fluss_data_dir }}"
+    - "{{ fluss_remote_dir }}"
+    - /etc/fluss/coordinator
+    - /etc/fluss/tablet
+    - /var/log/fluss
+
+- name: coordinator server.yaml
+  ansible.builtin.template:
+    src: fluss-coordinator.yaml.j2
+    dest: /etc/fluss/coordinator/server.yaml
+    owner: fluss
+    mode: "0644"
+  notify: restart fluss-coordinator
+
+- name: tablet server.yaml
+  ansible.builtin.template:
+    src: fluss-tablet.yaml.j2
+    dest: /etc/fluss/tablet/server.yaml
+    owner: fluss
+    mode: "0644"
+  notify: restart fluss-tablet
+
+- name: systemd units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: fluss-coordinator.service.j2, dest: fluss-coordinator.service }
+    - { src: fluss-tablet.service.j2, dest: fluss-tablet.service }
+  notify: restart fluss-coordinator
+
+- name: 启动并自启（coordinator 先于 tablet）
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - fluss-coordinator
+    - fluss-tablet
+
+- name: 等待 coordinator 9123
+  ansible.builtin.wait_for:
+    port: "{{ fluss_coordinator_port }}"
+    host: 127.0.0.1
+    timeout: 90
+
+- name: 等待 tablet 9124
+  ansible.builtin.wait_for:
+    port: "{{ fluss_tablet_port }}"
+    host: 127.0.0.1
+    timeout: 90

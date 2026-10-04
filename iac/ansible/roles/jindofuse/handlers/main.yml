@@ -1,0 +1,5 @@
+- name: restart jindofuse
+  ansible.builtin.systemd:
+    name: jindofuse-warehouse
+    daemon_reload: true
+    state: restarted

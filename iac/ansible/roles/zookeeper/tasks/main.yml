@@ -1,0 +1,62 @@
+# zookeeper 3.9.3 单节点（Flink HA + Fluss 元数据）
+- name: 下载 ZooKeeper {{ zookeeper_version }}
+  ansible.builtin.get_url:
+    url: "{{ apache_archive_mirror }}/zookeeper/zookeeper-{{ zookeeper_version }}/apache-zookeeper-{{ zookeeper_version }}-bin.tar.gz"
+    dest: "/tmp/apache-zookeeper-{{ zookeeper_version }}-bin.tar.gz"
+    mode: "0644"
+  register: zk_dl
+  until: zk_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包到 /opt
+  ansible.builtin.unarchive:
+    src: "/tmp/apache-zookeeper-{{ zookeeper_version }}-bin.tar.gz"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/apache-zookeeper-{{ zookeeper_version }}-bin"
+
+- name: /opt/zookeeper 符号链接
+  ansible.builtin.file:
+    src: "/opt/apache-zookeeper-{{ zookeeper_version }}-bin"
+    dest: /opt/zookeeper
+    state: link
+
+- name: 数据目录 + myid（单节点固定 1）
+  ansible.builtin.file:
+    path: "{{ zookeeper_data_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: 写 myid
+  ansible.builtin.copy:
+    content: "1\n"
+    dest: "{{ zookeeper_data_dir }}/myid"
+    mode: "0644"
+
+- name: zoo.cfg
+  ansible.builtin.template:
+    src: zoo.cfg.j2
+    dest: /opt/zookeeper/conf/zoo.cfg
+    mode: "0644"
+  notify: restart zookeeper
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: zookeeper.service.j2
+    dest: /etc/systemd/system/zookeeper.service
+    mode: "0644"
+  notify: restart zookeeper
+
+- name: 启动并自启
+  ansible.builtin.systemd:
+    name: zookeeper
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待 2181
+  ansible.builtin.wait_for:
+    port: "{{ zk_port }}"
+    host: 127.0.0.1
+    timeout: 60

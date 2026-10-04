@@ -1,0 +1,88 @@
+# common — 基础包、时间同步、数据盘挂载、uv standalone Python 3.12
+- name: 安装基础包
+  ansible.builtin.dnf:
+    name:
+      - java-17-openjdk-headless   # Flink 1.20.3 / ZK 运行时
+      - java-21-openjdk-headless   # Fluss 0.9 运行时（adtrader 实证 JDK21）
+      - fuse3                      # JindoFuse 依赖
+      - fuse3-libs
+      - tar
+      - curl
+      - which
+      - nc                         # 验证脚本用（echo srvr | nc）
+    state: present
+
+- name: 启用并启动 chronyd（时序数据依赖时钟准确）
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+
+- name: 数据盘 — 检查文件系统（设备名由 host_vars 实测回填，禁 auto-detect）
+  when: slr_data_disk_device is defined
+  block:
+    - name: 探测已有文件系统
+      ansible.builtin.command: "blkid -o value -s TYPE {{ slr_data_disk_device }}"
+      register: blkid_out
+      failed_when: blkid_out.rc not in [0, 2]
+      changed_when: false
+
+    - name: 格式化 ext4（仅空盘）
+      ansible.builtin.command: "mkfs.ext4 {{ slr_data_disk_device }}"
+      when: blkid_out.stdout == ""
+      changed_when: true
+
+    - name: 取数据盘 UUID
+      ansible.builtin.command: "blkid -s UUID -o value {{ slr_data_disk_device }}"
+      register: disk_uuid
+      changed_when: false
+
+    - name: 挂载 /data（fstab，UUID 源）
+      ansible.builtin.mount:
+        path: /data
+        src: "UUID={{ disk_uuid.stdout }}"
+        fstype: ext4
+        state: mounted
+
+- name: 目录骨架
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /data
+    - /opt
+    - "{{ jindofuse_mount }}"
+    - /etc/slr
+
+- name: 安装 uv（standalone Python {{ python_version }} 的确定性来源）
+  ansible.builtin.get_url:
+    url: "https://github.com/astral-sh/uv/releases/download/{{ uv_version }}/uv-x86_64-unknown-linux-gnu.tar.gz"
+    dest: /tmp/uv.tar.gz
+    mode: "0644"
+  register: uv_dl
+  until: uv_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包 uv 到 /usr/local/bin
+  ansible.builtin.unarchive:
+    src: /tmp/uv.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    extra_opts: ["--strip-components=1", "--wildcards", "*/uv"]
+    mode: "0755"
+
+- name: uv 安装 Python {{ python_version }}
+  ansible.builtin.command: "/usr/local/bin/uv python install {{ python_version }}"
+  register: uv_py
+  changed_when: "'Installed' in uv_py.stdout or 'Download' in uv_py.stdout"
+
+- name: 暴露 python3.12 到 /usr/local/bin
+  ansible.builtin.shell: |
+    set -e
+    PY=$(/usr/local/bin/uv python find {{ python_version }})
+    ln -sf "$PY" /usr/local/bin/python{{ python_version }}
+    ln -sf "$PY" /usr/local/bin/python3
+  args:
+    creates: "/usr/local/bin/python{{ python_version }}"

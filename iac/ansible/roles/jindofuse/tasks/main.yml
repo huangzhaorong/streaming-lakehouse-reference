@@ -1,0 +1,76 @@
+# jindofuse — OSS-HDFS 挂载为本地路径（Python pyarrow/DuckDB 直读零改动的关键）
+# 数据面 rw（reconcile JSON 写入）；应用面 -oro（group_vars 控制）
+- name: 下载 JindoSDK {{ jindosdk_version }}
+  ansible.builtin.get_url:
+    url: "{{ jindosdk_download_url }}"
+    dest: "/tmp/jindosdk-{{ jindosdk_version }}.tar.gz"
+    mode: "0644"
+  register: jindo_dl
+  until: jindo_dl is succeeded
+  retries: 3
+  delay: 5
+
+- name: 解包到 /opt/jindosdk
+  ansible.builtin.unarchive:
+    src: "/tmp/jindosdk-{{ jindosdk_version }}.tar.gz"
+    dest: /opt
+    remote_src: true
+    mode: "0755"
+  # tarball 顶层目录名以实测为准（jindosdk-x.y.z-linux 等）→ 下方符号链接统一为 /opt/jindosdk
+
+- name: 定位解包目录
+  ansible.builtin.find:
+    paths: /opt
+    patterns: "jindosdk-{{ jindosdk_version }}*"
+    file_type: directory
+  register: jindo_dir
+
+- name: /opt/jindosdk 符号链接（版本目录 → 固定路径）
+  ansible.builtin.file:
+    src: "{{ jindo_dir.files[0].path }}"
+    dest: /opt/jindosdk
+    state: link
+
+- name: native 库进 /usr/lib64
+  ansible.builtin.shell: |
+    cp -f /opt/jindosdk/lib/native/*.so /usr/lib64/ 2>/dev/null || \
+    cp -f /opt/jindosdk/lib/*.so /usr/lib64/
+    ldconfig
+  args:
+    creates: /usr/lib64/libjindo_sdk.so
+
+- name: 配置目录与 jindosdk.cfg
+  ansible.builtin.template:
+    src: jindosdk.cfg.j2
+    dest: /etc/jindosdk/jindosdk.cfg
+    mode: "0644"
+  vars:
+    jindosdk_conf_dir: /etc/jindosdk
+
+- name: 挂载点存在
+  ansible.builtin.file:
+    path: "{{ jindofuse_mount }}"
+    state: directory
+    mode: "0755"
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: jindofuse-warehouse.service.j2
+    dest: /etc/systemd/system/jindofuse-warehouse.service
+    mode: "0644"
+  notify: restart jindofuse
+
+- name: 启动并自启 jindofuse-warehouse
+  ansible.builtin.systemd:
+    name: jindofuse-warehouse
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: 等待挂载可用
+  ansible.builtin.command: "stat {{ jindofuse_mount }}"
+  register: mount_check
+  until: mount_check.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false

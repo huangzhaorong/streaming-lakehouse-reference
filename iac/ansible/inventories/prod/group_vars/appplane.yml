@@ -1,0 +1,9 @@
+# 应用面（ecs-app-01）：Python 服务 / query-api / Prometheus / Grafana / n8n
+jindofuse_readonly: true           # 应用面只读 warehouse（pyarrow/DuckDB 直读）
+jindofuse_extra_args: "-oro"
+
+# host_vars/ecs-app-01.yml → slr_data_disk_device: /dev/vdb
+prometheus_data_dir: /data/prometheus
+grafana_data_dir: /data/grafana
+lancer_db_path: /data/lancer
+n8n_user_folder: /var/lib/n8n

@@ -1,0 +1,6 @@
+; JindoSDK 客户端配置（fuse 与 CLI 共用；JVM 层同名键在 flink-conf/core-site 另行渲染）
+; 凭证：ECS RAM role 免 AK（instance metadata），角色权限由 Terraform ram-role 模块下发
+[jindosdk]
+fs.oss.endpoint = {{ oss_dls_endpoint }}
+fs.oss.provider.endpoint = ECS_ROLE
+fs.oss.provider.format = JSON

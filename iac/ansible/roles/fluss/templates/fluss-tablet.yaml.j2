@@ -1,0 +1,10 @@
+# ---------- Fluss TabletServer（server.yaml，0.9 官方口径）----------
+bind.listeners: FLUSS://{{ inventory_hostname }}:{{ fluss_tablet_port }}
+# 单节点固定 id=0（多 tablet 扩容时改吃 inventory 顺序，参考 adtrader fluss role）
+tablet-server.id: 0
+
+zookeeper.address: 127.0.0.1:{{ zk_port }}
+zookeeper.path.root: /fluss
+
+data.dir: {{ fluss_data_dir }}
+remote.data.dir: {{ fluss_remote_dir }}

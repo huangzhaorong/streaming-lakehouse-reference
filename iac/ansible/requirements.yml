@@ -1,0 +1,3 @@
+# 无 galaxy 依赖：全部 role 自包含（模式承袭 adtrader-iac-infra，按需裁剪重写）。
+# ansible-core >= 2.16（本机 2.20.4）；目标机 Alibaba Cloud Linux 3 仅需 dnf/python3。
+collections: []

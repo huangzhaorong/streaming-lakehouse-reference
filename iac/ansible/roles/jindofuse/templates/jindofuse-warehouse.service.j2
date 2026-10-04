@@ -1,0 +1,16 @@
+[Unit]
+Description=JindoFuse — OSS-HDFS warehouse mount ({{ slr_bucket }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+Environment=JINDOSDK_CONF_DIR=/etc/jindosdk
+Environment=LD_LIBRARY_PATH=/opt/jindosdk/lib/native:/opt/jindosdk/lib:/usr/lib64
+ExecStart=/opt/jindosdk/bin/jindo-fuse {{ jindofuse_mount }} -ouri={{ jindofuse_uri }} {{ jindofuse_extra_args | default('') }} -oauto_unmount
+ExecStop=/bin/umount -l {{ jindofuse_mount }}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

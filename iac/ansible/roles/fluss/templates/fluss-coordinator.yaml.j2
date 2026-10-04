@@ -1,0 +1,11 @@
+# ---------- Fluss CoordinatorServer（server.yaml，0.9 官方口径）----------
+# 键名承 adtrader 2026-10-01 真机 smoke 实证；单机部署 bind 本机地址
+bind.listeners: FLUSS://{{ inventory_hostname }}:{{ fluss_coordinator_port }}
+
+zookeeper.address: 127.0.0.1:{{ zk_port }}
+zookeeper.path.root: /fluss
+
+# 本地盘（R7：0.9 remote 走 OSS 需插件+AK/RAM 配置，热层可重建，暂不引入——
+# 需要时参考 adtrader roles/fluss/templates/fluss-coordinator.yaml.j2 的 fs.oss.* 段）
+data.dir: {{ fluss_data_dir }}
+remote.data.dir: {{ fluss_remote_dir }}

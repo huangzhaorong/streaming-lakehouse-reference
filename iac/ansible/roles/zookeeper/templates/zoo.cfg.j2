@@ -1,0 +1,8 @@
+tickTime=2000
+initLimit=10
+syncLimit=5
+dataDir={{ zookeeper_data_dir }}
+clientPort={{ zk_port }}
+# 4LW 命令全放行（srvr/ruok 运维验证需要；端口仅组内可达）
+4lw.commands.whitelist=*
+admin.enableServer=false

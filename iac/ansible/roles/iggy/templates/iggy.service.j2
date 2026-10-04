@@ -1,0 +1,19 @@
+[Unit]
+Description=Apache Iggy {{ iggy_version }} (message streaming broker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/iggy
+EnvironmentFile=/etc/iggy/iggy.env
+ExecStart=/opt/iggy/iggy-server
+Restart=on-failure
+RestartSec=5
+# io_uring 需求（compose 的 cap_add SYS_NICE + memlock -1 等价物）
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_SYS_NICE
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

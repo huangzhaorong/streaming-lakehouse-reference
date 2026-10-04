@@ -1,0 +1,11 @@
+- name: restart fluss-coordinator
+  ansible.builtin.systemd:
+    name: fluss-coordinator
+    daemon_reload: true
+    state: restarted
+
+- name: restart fluss-tablet
+  ansible.builtin.systemd:
+    name: fluss-tablet
+    daemon_reload: true
+    state: restarted

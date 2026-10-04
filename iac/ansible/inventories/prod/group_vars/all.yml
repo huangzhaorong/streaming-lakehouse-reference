@@ -1,0 +1,60 @@
+# ============================================================
+# SLR prod — 全组公共变量（版本锁唯一事实源，与计划 Global Constraints 逐字一致）
+# 秘密不在此文件：见 ../vault.yml（ansible-vault 加密，键名清单在 vault-example.yml）
+# ============================================================
+
+# --- OSS / OSS-HDFS ---
+slr_bucket: slr-lakehouse-prod
+slr_state_bucket: slr-lakehouse-prod-state   # R1 回退备用（普通 OSS 命名空间）
+slr_artifacts_bucket: slr-artifacts-prod
+oss_region: cn-beijing
+oss_dls_endpoint: cn-beijing.oss-dls.aliyuncs.com
+oss_internal_endpoint: oss-cn-beijing-internal.aliyuncs.com
+# Flink/SQL 侧：纯桶名 URI + 区域级 dls endpoint（Paimon 拒绝 bucket 内嵌 authority）
+slr_warehouse_base: "oss://{{ slr_bucket }}/warehouse"
+# JindoFuse 挂载 URI：bucket 内嵌 dls 形式（fuse 官方写法）
+jindofuse_uri: "oss://{{ slr_bucket }}.{{ oss_dls_endpoint }}/"
+jindofuse_mount: /mnt/warehouse
+artifacts_base_url: "https://{{ slr_artifacts_bucket }}.oss-{{ oss_region }}.aliyuncs.com"
+
+# --- 版本锁 ---
+jindosdk_version: "6.10.8"
+jindosdk_download_url: "https://jindodata-binary.oss-cn-shanghai.aliyuncs.com/release/{{ jindosdk_version }}/jindosdk-{{ jindosdk_version }}-linux.tar.gz"
+flink_version: "1.20.3"
+flink_scala_suffix: "2.12"
+zookeeper_version: "3.9.3"
+fluss_version: "0.9.0-incubating"
+iggy_version: "0.7.0"
+prometheus_version: "v2.53.0"
+grafana_version: "11.1.0"
+node_version: "v24.10.0"   # 实施首日从 https://npmmirror.com/mirrors/node/ 核对最新 v24 LTS patch 回填
+n8n_version: "2.41.6"      # 锁死：n8n 3.0 起废弃 npm 安装方式
+python_version: "3.12"
+uv_version: "0.8.10"       # uv standalone Python（ALinux3 dnf 无 3.12 的确定性替代）
+
+# --- Iggy 提取件（scripts/extract-iggy-binary.sh 产物，上传 artifacts 桶后回填 sha256）---
+iggy_artifact_url: "{{ artifacts_base_url }}/iggy-{{ iggy_version }}-linux-x86_64.tar.gz"
+iggy_artifact_sha256: ""   # ★ 必填：提取实测值（为空时 iggy role assert 拦截）
+
+# --- 镜像源 ---
+apache_archive_mirror: "https://archive.apache.org/dist"
+aliyun_apache_mirror: "https://mirrors.aliyun.com/apache"
+pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+npm_registry: "https://registry.npmmirror.com"
+
+# --- 服务端口（跨机引用；组内互通由 SG inner_access_policy=Accept 承担） ---
+iggy_tcp_port: 8090
+iggy_http_port: 3000
+zk_port: 2181
+fluss_coordinator_port: 9123
+fluss_tablet_port: 9124
+flink_ui_port: 8081
+flink_metrics_port: 9249
+prometheus_port: 9090
+grafana_port: 3001
+n8n_port: 5678
+query_api_port: 8009
+query_api_metrics_port: 8010
+
+# --- 业务 ---
+trading_pairs: "BTC-USD,ETH-USD,SOL-USD,DOGE-USD,AVAX-USD,LINK-USD"

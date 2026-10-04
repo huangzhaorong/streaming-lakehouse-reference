@@ -1,0 +1,5 @@
+- name: restart iggy
+  ansible.builtin.systemd:
+    name: iggy
+    daemon_reload: true
+    state: restarted

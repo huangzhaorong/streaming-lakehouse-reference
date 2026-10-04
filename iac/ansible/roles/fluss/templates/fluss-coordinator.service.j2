@@ -1,0 +1,19 @@
+[Unit]
+Description=Apache Fluss CoordinatorServer {{ fluss_version }}
+After=network-online.target zookeeper.service
+Wants=network-online.target
+Requires=zookeeper.service
+
+[Service]
+Type=simple
+User=fluss
+Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+Environment=FLUSS_CONF_DIR=/etc/fluss/coordinator
+Environment=FLUSS_LOG_DIR=/var/log/fluss
+ExecStart=/opt/fluss/bin/coordinator-server.sh start-foreground
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
