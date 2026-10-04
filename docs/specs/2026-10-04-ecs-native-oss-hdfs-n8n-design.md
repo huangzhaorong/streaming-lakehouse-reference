@@ -29,7 +29,7 @@ cn-beijing，复用现有 VPC/vSwitch（data source 只读引用），单 SG inn
 ┌─ ecs-app-01 应用面 g8i.xlarge 4C16G（40G+100G ESSD）─┐   ┌─ ecs-data-01 数据面 g8i.2xlarge 8C32G（40G+200G PL1）─┐
 │ poller:8000 bridge:8001 replay:8002(oneshot)        │   │ Iggy 0.7.0 TCP:8090 HTTP:3000（/data/iggy）            │
 │ lancer:8003/8004 + indexer(systemd timer 每小时)     │──▶│ ZooKeeper 3.9.3 :2181（/data/zookeeper）               │
-│ query-api:8009(新) Prometheus:9090 Grafana:3001     │TCP│ Fluss coord:9123 tablet:9124（/data/fluss 持久化）      │
+│ query-api:8009 api/8010 metrics(新) Prom:9090 Grafana:3001│TCP│ Fluss coord:9123 tablet:9124（/data/fluss 持久化）  │
 │ n8n:5678  /mnt/warehouse(fuse 只读) /data/lancer    │   │ Flink 1.20.3 JM:8081 TM:9249×8slot（HA=ZK）            │
 │ 公网出向：Coinbase WSS、DashScope                    │   │ /mnt/warehouse(fuse 读写) reconcile timer(5min)        │
 └──────────────────────────────────────────────────────┘   └────────────────────────────────────────────────────────┘
