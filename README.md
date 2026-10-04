@@ -1,7 +1,9 @@
 # Streaming Lakehouse Reference
 
 A streaming data platform processing live crypto ticks through six tiers
-with no traditional database.
+with no traditional database — deployed **natively on Alibaba Cloud ECS**
+(systemd, no Docker), with the lakehouse on **OSS-HDFS** and the trading
+decision chain fully owned by **n8n + DashScope Qwen**.
 
 **No real money. Real data. Real architecture.**
 
@@ -10,13 +12,9 @@ with no traditional database.
 ## What This Is
 
 A platform for watching cryptocurrency markets, simulating trading decisions
-(paper trading), and learning modern data engineering technologies through
-hands-on use with data you actually care about.
-
-The project is built in deliberate phases — each phase introduces one new
-technology, leaves the system in a working state, and teaches something real.
-
----
+(paper trading), and learning modern data engineering through hands-on use.
+Everything — cloud resources, software installation, configuration — is
+Infrastructure-as-Code (Terraform + Ansible, self-contained in `iac/`).
 
 ## What This Is Not
 
@@ -26,311 +24,103 @@ technology, leaves the system in a working state, and teaches something real.
 
 ---
 
-## The Stack (as built)
+## The Stack
 
-### Data Source
-- **Coinbase Exchange WebSocket** — real-time sub-second ticker data (BTC, ETH, SOL, DOGE, AVAX, LINK)
-
-### Event Infrastructure (Phase 2)
-- **Apache Iggy** — Rust-native event bus, 3-partition `crypto/prices` topic
-- **Custom Flink Connector** — [flink-connector-iggy](https://github.com/gordonmurray/flink-connector-iggy), built from scratch for Flink 1.18–1.20
-
-### Stream Processing (Phase 3)
-- **Apache Flink 1.20.3** — OHLCV candle computation via Flink SQL, 8 task slots
-- **ZooKeeper 3.9** — coordination (used by Fluss, available for Flink HA)
-
-### Hot SQL Tier (Phase 4)
-- **Apache Fluss 0.9.0** — real-time streaming storage, sub-second SQL queries
-- **Pipeline throughput**: ~12,000 records/sec Iggy → Flink → Fluss
-
-### Tiered Lakehouse (Phase 5)
-- **Apache Paimon 1.3.1** — warm tier, 1-min OHLCV candles (append-only, 4 buckets, parquet+zstd)
-- **Apache Iceberg 1.10.1** — cold tier, raw tick archive (identity-partitioned by date, parquet+zstd)
-- **Hadoop 3.3.6** — filesystem client for Iceberg reads
-- Flink STATEMENT SET fans Iggy source to both sinks in a single job
-
-### Historical Replay (Phase 6)
-- **Replay Service** — reads Iceberg cold tier via PyArrow, replays to Iggy at configurable speed (default 60x)
-- Separate Flink pipeline computes replay candles into Paimon `replay_ohlcv_1m`
-- On-demand via Docker Compose profiles: `docker compose --profile replay up replay`
-
-### Vector Pattern Matching (Phase 7)
-- **LanceDB 0.30** — 16k+ searchable price pattern vectors (1-hour sliding windows, Z-score normalized)
-- **Lancer** service — dual-mode: batch indexer (Paimon → LanceDB) + live signal matcher (Iggy → LanceDB → Grafana annotations)
-- **FastAPI** — `GET /api/signals/{pair}` returns top-5 historical matches with similarity scores
-
-### LLM Analyst (Phase 8)
-- **Ollama** (host) — Llama 3 8B (`mannix/llama3-8b-ablitered-v3`), CPU inference (~3s per pair)
-- **Analyst Service** — RAG-style: gathers price trends from Prometheus + pattern matches from Lancer, builds prompt, calls Ollama, pushes structured narrative as Grafana annotations every 5 minutes
-- **FastAPI** — `GET /api/latest/{pair}` returns current AI narrative
-
-### Paper Trading Engine (Phase 10)
-- **Consensus Engine** — polls Lancer (similarity) + Analyst (sentiment), executes when signals align (enter >= 20% similarity + Bullish, exit < 10% or Bearish)
-- **Flink Clearing House** — processes OrderRequests from Iggy, applies 0.1% fees + 0.05% slippage, writes to Paimon (trades + balance) and Fluss (executed trades)
-- **Paimon Ledger** — PK tables: `balance` (aggregation merge engine) + `trades` (deduplicate). Zero traditional databases.
-- **DuckDB Audit** — `GET /api/audit` queries Paimon parquet files for strategy P&L, win rate, fee impact
-
-### Monitoring (Phase 1)
-- **Prometheus** — scrapes poller, bridge, Flink, replay, lancer, and analyst metrics
-- **Grafana** — five dashboards: Crypto Live Ticks (with AI + trade annotations), Flink Pipeline, Historical Replay, Lancer Pattern Matcher, Paper Trading Equity
-
----
-
-## Architecture
-
-![Architecture](images/architecture.svg)
-
----
-
-## Screenshots
-
-### Crypto Live Ticks — real-time price, OHLCV candles, WebSocket status
-![Live Ticks Dashboard](images/live_ticks.png)
-
-### AI Analyst annotation — LLM-generated market commentary on the price chart
-![LLM Annotation](images/live_tick_llm_annotation.png)
-
-### Flink job graph — streaming pipeline processing live ticks
-![Flink Jobs](images/flink_jobs.png)
-
-### Paper Trading — equity curve, positions, and P&L tracking
-![Paper Trading Dashboard](images/paper_trading.png)
-
----
-
-## Services
-
-| Service | Image | Port | Purpose |
-|---|---|---|---|
-| iggy | `apache/iggy:0.7.0` | 3000, 8090 | Event spine (TCP + HTTP) |
-| iggy-web-ui | `apache/iggy-web-ui:0.2.0` | 8888 | Iggy management UI |
-| poller | Custom Python | 8000 | Coinbase WebSocket → Iggy |
-| bridge | Custom Python | 8001 | Iggy → Prometheus metrics |
-| zookeeper | `zookeeper:3.9` | 2181 | Coordination for Fluss |
-| jobmanager | Custom Flink 1.20.3 (`flink/Dockerfile`) | 8081 | Flink JobManager + SQL client |
-| taskmanager | Custom Flink 1.20.3 (`flink/Dockerfile`) | 9249 | Flink TaskManager + Prometheus metrics |
-| fluss-coordinator | `apache/fluss:0.9.0-incubating` | 9123 | Fluss metadata + coordination |
-| fluss-tablet | `apache/fluss:0.9.0-incubating` | 9124 | Fluss data storage |
-| prometheus | `prom/prometheus:v2.53.0` | 9090 | Metrics collection |
-| grafana | `grafana/grafana:11.1.0` | 3001 | Dashboards |
-| replay | Custom Python (profiles: replay) | 8002 | Iceberg → Iggy historical replay |
-| lancer-indexer | Custom Python (profiles: index) | — | Paimon → LanceDB pattern index |
-| lancer | Custom Python | 8003, 8004 | Live pattern matcher (API + metrics) |
-| analyst | Custom Python (network_mode: host) | 8005, 8006 | LLM market commentary (API + metrics) |
-| consensus | Custom Python (network_mode: host) | 8007, 8008 | Paper trading engine (API + metrics) |
-
----
-
-## Quick Start (first time)
-
-```bash
-git clone <repo>
-cd streaming-lakehouse-reference
-cp .env.example .env
-
-# Download connector JARs (~250 MB, verified with SHA-256 checksums)
-./scripts/download-jars.sh
-
-docker compose up -d
-```
-
-Then submit the Flink jobs and seed the balance (see "After a Reboot" below).
-
-### Web UIs
-
-- **Grafana**: http://localhost:3001 (admin / admin)
-- **Flink UI**: http://localhost:8081
-- **Iggy Web UI**: http://localhost:8888/dashboard
-- **Prometheus**: http://localhost:9090
-
----
-
-## After a Reboot
-
-Docker containers restart automatically (`restart: unless-stopped`), but **Flink SQL jobs do not survive restarts** — they must be resubmitted. Iggy topics are also recreated by the Python services on startup, but the **Flink jobs must be submitted after the topics exist**.
-
-### Step 1: Start all containers
-
-```bash
-docker compose up -d
-```
-
-### Step 2: Ensure Ollama is running on the host
-
-```bash
-ollama serve &  # if not already running as a systemd service
-```
-
-### Step 3: Submit Flink SQL jobs (order matters)
-
-Wait ~30 seconds after `docker compose up` for Iggy and Fluss to be healthy, then:
-
-```bash
-# Fluss hot tier (reads from Iggy crypto/prices → Fluss)
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/fluss-hot-tier.sql
-
-# Lakehouse tier (reads from Iggy crypto/prices → Paimon + Iceberg)
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/lakehouse-tier.sql
-
-# Clearing house (reads from Iggy crypto/orders → Paimon + Fluss)
-# NOTE: The consensus engine must start first to create the crypto/orders topic.
-#        Wait a few seconds after containers are up, then submit:
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/clearing-house.sql
-```
-
-### Step 4: Verify
-
-```bash
-# Check all 3 Flink jobs are RUNNING
-curl -s http://localhost:8081/jobs | python3 -c "import sys,json; [print(j['id'][:12], j['status']) for j in json.load(sys.stdin)['jobs'] if j['status']=='RUNNING']"
-
-# Check APIs
-curl -s http://localhost:8007/api/health  # consensus
-curl -s http://localhost:8005/api/health  # analyst
-curl -s http://localhost:8003/api/health  # lancer
-```
-
-### What resets on reboot
-
-| Component | Persists? | Notes |
-|-----------|-----------|-------|
-| Iggy topics | No | Recreated automatically by poller/consensus on startup |
-| Iggy messages | No | Historical messages lost; new ticks flow immediately |
-| Flink jobs | No | Must resubmit SQL files (see above) |
-| Paimon data | Yes | Docker volume `flink-warehouse` persists |
-| Iceberg data | Yes | Docker volume `flink-warehouse` persists |
-| LanceDB index | Yes | Stored at `./data/lancedb/` |
-| Paimon balance | Yes | Seeded once; persists across restarts |
-| Consensus positions | No | In-memory; resets to $1K cash, no positions |
-| Grafana dashboards | Yes | Provisioned from files |
-| Prometheus data | Yes | Stored at `./data/prometheus/` (7-day retention) |
-
-### Seed balance (first time only)
-
-Only needed once. If `paimon.crypto.balance` already has data, skip this:
-
-```bash
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/seed-balance.sql
-```
-
----
-
-## Optional Operations
-
-### Re-index Lancer (after adding new pairs or accumulating more data)
-
-```bash
-docker compose --profile index run --rm lancer-indexer
-```
-
-### Replay historical data
-
-```bash
-docker compose --profile replay up replay -d
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/replay-pipeline.sql
-```
-
-Configure via `.env`: `REPLAY_SPEED`, `REPLAY_DATE`, `REPLAY_PAIRS`.
-
-### Run the OHLCV candle query (interactive)
-
-```bash
-docker exec -i jobmanager /opt/flink/bin/sql-client.sh embedded < flink/sql/ohlcv-candles.sql
-```
-
----
-
-## Build Phases
-
-| Phase | What It Adds | Status |
-|---|---|---|
-| 1 | Live crypto price dashboard (Prometheus + Grafana) | Complete |
-| 2 | Iggy event spine + MCP | Complete |
-| 3 | Flink stream processing + OHLCV candles | Complete |
-| 4 | Fluss hot SQL tier + Grafana pipeline dashboard | Complete |
-| 5 | Tiered lakehouse (Paimon + Iceberg) | Complete |
-| 6 | Historical replay (Iceberg → Iggy → Flink → Paimon) | Complete |
-| 7 | LanceDB vector pattern matching (Lancer) | Complete |
-| 8 | LLM Analyst (Grafana-native, Ollama) | Complete |
-| 9 | Multi-pair expansion + dynamic dashboards | Complete |
-| 10 | Lakehouse execution engine (paper trading) | Complete |
-
-Each phase introduces one new technology, leaves the system working, and teaches something real.
-
----
-
-## Grafana Dashboards
-
-All dashboards at http://localhost:3001 (admin / admin).
-
-| Dashboard | URL | Tags | What It Shows |
-|---|---|---|---|
-| Crypto Live Ticks | `/d/crypto-live-ticks` | hot, live | Price/bid/ask chart per pair (dropdown selector), all-pairs overview, WebSocket status, message throughput |
-| Flink Pipeline | `/d/flink-pipeline` | hot, streaming, flink | Records/sec and bytes/sec into Fluss, total records written |
-| Historical Replay | `/d/replay` | cold, replay, iceberg | Replay progress, throughput, records sent vs total, Flink pipeline in/out |
-| Lancer — Pattern Matcher | `/d/lancer` | data, vectors, lancedb | Top similarity score, index size, candle buffer fill, queries run, annotations pushed |
-| Paper Trading | `/d/trading` | hot, trading, execution | Equity curve, cash balance, position values, unrealized P&L, buys/sells count, signal checks |
-
-### Annotations on Live Ticks
-
-The Crypto Live Ticks dashboard displays four annotation layers (toggleable):
-
-| Colour | Source | Content |
-|---|---|---|
-| Yellow | AI Analyst | LLM market commentary — sentiment, observation, pattern context (every 5 min) |
-| Cyan | Lancer | Pattern match alerts when similarity exceeds threshold |
-| Green | Consensus Engine | **BUY** trades — pair, price, quantity, value |
-| Red | Consensus Engine | **SELL** trades — pair, price, quantity, value |
-
-Hover over any annotation line on the chart to see the full detail.
-
----
-
-## APIs
-
-| Service | Endpoint | Description |
-|---|---|---|
-| Lancer | `GET http://localhost:8003/api/signals/{pair}` | Top-5 historical pattern matches with similarity scores |
-| Lancer | `GET http://localhost:8003/api/health` | Index status |
-| Analyst | `GET http://localhost:8005/api/latest` | Current LLM narratives for all pairs |
-| Analyst | `GET http://localhost:8005/api/latest/{pair}` | Current narrative for a specific pair |
-| Consensus | `GET http://localhost:8007/api/positions` | Cash balance and open positions |
-| Consensus | `GET http://localhost:8007/api/trades` | Last 50 executed trades with price, quantity, signals |
-| Consensus | `GET http://localhost:8007/api/audit` | DuckDB strategy audit — P&L, total fees, trade count |
-| Consensus | `GET http://localhost:8007/api/health` | Engine status, tracked pairs, cash balance |
-
----
-
-## Coins Monitored
-
-| Symbol | Name |
+| Layer | Technology |
 |---|---|
-| BTC | Bitcoin |
-| ETH | Ethereum |
-| SOL | Solana |
-| DOGE | Dogecoin |
-| AVAX | Avalanche |
-| LINK | Chainlink |
+| Data source | Coinbase Exchange WebSocket（6 pairs，sub-second ticks） |
+| Event bus | Apache Iggy 0.7.0（`crypto/prices` `crypto/orders` `crypto/replay`） |
+| Stream processing | Apache Flink 1.20.3（SQL，8 slots，ZooKeeper HA，state 全落 OSS-HDFS） |
+| Hot tier | Apache Fluss 0.9.0-incubating |
+| Lakehouse | Apache Paimon（`ohlcv_1m`/`balance`/`trades`）+ Apache Iceberg（tick 归档），warehouse = **OSS-HDFS**（JindoSDK） |
+| Vector matching | LanceDB（lancer indexer/signal，pyarrow/DuckDB 经 JindoFuse 直读湖内 parquet） |
+| Decision chain | **n8n 2.41.6**（信号→DashScope Qwen 情绪→风控→Iggy HTTP 发单；替代原 analyst+consensus） |
+| Query surface | **query-api**（FastAPI :8009，DuckDB 只读查询 + n8n 状态镜像 + `slr_*` 指标） |
+| Observability | Prometheus v2.53.0 + Grafana 11.1.0（5 dashboards） |
+| IaC | Terraform（alicloud，OSS backend state）+ Ansible（systemd 原生部署） |
+
+## Deployment Topology（cn-beijing）
+
+```
+ecs-app-01 应用面 4C16G              ecs-data-01 数据面 8C32G
+  poller/bridge/lancer(+indexer timer)   Iggy :8090/:3000 · ZooKeeper :2181
+  replay(oneshot) · query-api :8009      Fluss :9123/:9124 · Flink JM :8081/TM
+  Prometheus :9090 · Grafana :3001       reconcile timer(5min)
+  n8n :5678 · /mnt/warehouse(fuse ro)    /mnt/warehouse(fuse rw)
+        └────────────┬────────────────────────┘
+          OSS-HDFS 桶 slr-lakehouse-prod
+          warehouse/{paimon,iceberg,backfill} + flink/{checkpoints,savepoints,ha}
+```
+
+公网入向仅 SSH 白名单；UI 一律 SSH 隧道（详见 runbook）。
 
 ---
 
-## Project Conventions
+## Repository Layout
 
-- All services run via Docker Compose
-- All config via `.env` — never hardcoded
-- One phase at a time — commit before starting the next
+```
+iac/terraform/     资源供给（ECS×2 / OSS×3 / RAM role / SG，environments/prod）
+iac/ansible/       软件安装与配置（10 roles / 3 playbooks / group_vars 版本锁）
+iac/scripts/       terraform output → ansible inventory 生成管道
+flink/sql/         Flink SQL 作业（部署期经 scripts/render-sql.sh 渲染路径）
+poller/ bridge/ replay/ lancer/   Python 服务（systemd 部署，零 compose 依赖）
+services/query-api/               瘦只读查询服务（替代 consensus 查询面）
+n8n/               trading-decision workflow（decide.js 事实源 + 构建脚本 + 测试）
+scripts/           download-jars / render-sql / reconcile-snapshot / backfill / extract-iggy-binary
+docs/              runbook-ecs-deploy（部署手册）· env-reference · clean-slate-guide · specs/ · plans/
+```
+
+## Deploy
+
+完整步骤（含 OSS-HDFS 控制台开通、金丝雀门槛 G1-G3、n8n owner 带外步骤、端到端验证）：
+
+**→ [`docs/runbook-ecs-deploy.md`](docs/runbook-ecs-deploy.md)**
+
+摘要：
+
+```bash
+./scripts/extract-iggy-binary.sh dist/          # 一次性：Iggy 二进制提取（需本机 docker）
+cd iac/terraform/environments/prod && terraform init -backend-config=backend.conf && terraform apply
+./iac/scripts/generate-inventory.sh prod
+cd iac/ansible
+ansible-playbook playbook_dataplane.yaml        # 金丝雀 G1/G2/G3（runbook）
+ansible-playbook playbook_jobs.yaml             # Flink 作业（seed 守卫内置）
+ansible-playbook playbook_appplane.yaml         # Python/n8n/监控
+```
+
+## Verify
+
+```bash
+curl -s http://localhost:8081/jobs/overview    # ≥3 流作业 RUNNING（数据面）
+curl -s http://localhost:8009/api/health       # query-api
+curl -s http://localhost:8009/api/state        # n8n 决策状态镜像（updated_at 滚动）
+# Grafana :3001（SSH 隧道）5 dashboards；n8n :5678 Executions 60s 周期 success
+```
+
+## Tests（本地门禁）
+
+```bash
+bash scripts/tests/test_render_sql.sh
+PYTHONPATH=services/query-api/_deps python3 -m pytest services/query-api n8n/tests/test_workflow_json.py iac/scripts/tests -q
+node --test n8n/tests/*.mjs                    # decide() 风控 14 例
+terraform -chdir=iac/terraform/environments/prod validate
+ansible-playbook -i iac/ansible/inventories/prod/hosts.dummy iac/ansible/playbook_dataplane.yaml --syntax-check
+```
 
 ---
 
-## Data Source
+## Documentation
 
-Prices are sourced from the **Coinbase Exchange Public WebSocket**
-(`wss://ws-feed.exchange.coinbase.com`). Real-time, sub-second ticker data.
-No authentication or API keys required for public market data.
+- [`architecture.md`](architecture.md) — 数据流、组件职责、端口表、存储布局
+- [`docs/runbook-ecs-deploy.md`](docs/runbook-ecs-deploy.md) — 部署/验证/回退手册
+- [`docs/env-reference.md`](docs/env-reference.md) — 全部配置项归属（替代 .env.example）
+- [`docs/clean-slate-guide.md`](docs/clean-slate-guide.md) — 彻底重置与历史回填
+- [`docs/specs/`](docs/specs/) · [`docs/plans/`](docs/plans/) — 迁移设计与实施计划
 
----
+## History
 
-## More Info
-
-- [architecture.md](architecture.md) — full system design and component details
-- [docs/clean-slate-guide.md](docs/clean-slate-guide.md) — full reset with 6-month historical backfill
+Phases 1–15 built this system on Docker Compose with a local Ollama analyst
+and a Python consensus engine. The 2026-10 ECS migration replaced the
+runtime (systemd), the lake storage (OSS-HDFS), and the decision chain
+(n8n + Qwen); the compose path was removed entirely. Design record:
+`docs/specs/2026-10-04-ecs-native-oss-hdfs-n8n-design.md`.
