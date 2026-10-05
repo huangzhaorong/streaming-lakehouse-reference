@@ -1,13 +1,11 @@
-# 数据面部署：Iggy / ZooKeeper / Fluss / Flink（JM+TM）/ JindoFuse(rw) / reconcile timer
-# 前置：terraform apply + OSS-HDFS 控制台开通 + iggy 提取件已上传 artifacts 桶（runbook Phase 1）
+# 数据面部署：Iggy / ZooKeeper / Fluss（Flink 已分离至计算面 playbook_computeplane）
+# 前置：terraform apply + iggy 提取件已上传 artifacts 桶（runbook Phase 1）
 # 用法：ansible-playbook playbook_dataplane.yaml
 - name: SLR dataplane (ecs-data-01)
   hosts: dataplane
   become: true
   roles:
     - common
-    - jindofuse      # rw 挂载（reconcile JSON 写入）
     - zookeeper
     - iggy
     - fluss
-    - flink

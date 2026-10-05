@@ -4,7 +4,7 @@
 # ============================================================
 
 output "ansible_inventory" {
-  description = "Ansible inventory 格式实例信息（dataplane/appplane 两组）"
+  description = "Ansible inventory 格式实例信息（dataplane/appplane/computeplane 三组）"
   value = {
     for group_key, module in module.ecs_instances :
     group_key => [
@@ -24,13 +24,18 @@ output "instance_registry" {
 }
 
 output "data_ip" {
-  description = "数据面私网 IP（Python 服务 IGGY_HOST、Prometheus 抓 Flink 9249 等跨机地址）"
+  description = "数据面私网 IP（Python 服务/Flink 的 IGGY_HOST、Fluss bootstrap 等跨机地址）"
   value       = module.ecs_instances["dataplane"].private_ips[0]
 }
 
 output "app_ip" {
   description = "应用面私网 IP"
   value       = module.ecs_instances["appplane"].private_ips[0]
+}
+
+output "compute_ip" {
+  description = "计算面私网 IP（Prometheus 抓 Flink 9249、Flink UI 8081 跨机地址）"
+  value       = module.ecs_instances["computeplane"].private_ips[0]
 }
 
 output "security_group_id" {

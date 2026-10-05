@@ -18,10 +18,11 @@ oss_bucket_name       = "slr-lakehouse-prod"
 artifacts_bucket_name = "slr-artifacts-prod"
 ram_role_name         = "slr-oss-role"
 
-# 两台分层（规格缺货时同核数替代：g8i→g7→c7，替代后在此注明）
+# 三台分层（规格缺货时同核数替代：g8i→g7→c7，替代后在此注明）
+# ★ 顺序即语义：组与组内 private_ips/hostnames 永不重排，只在末尾追加
 slr_instances = {
   dataplane = {
-    instance_type               = "ecs.g8i.2xlarge" # 8C32G：Iggy/ZK/Fluss×2/Flink JM+TM(8 slot)
+    instance_type               = "ecs.g8i.2xlarge" # 8C32G：Iggy/ZK/Fluss×2
     count                       = 1
     disk_size                   = 40
     data_disk_size              = 200               # Fluss data/remote + Iggy + ZK
@@ -41,5 +42,16 @@ slr_instances = {
     hostnames                   = ["ecs-app-01"]
     hostname_prefix             = "ecs-app"
     internet_max_bandwidth_out  = 100               # Coinbase WSS + DashScope 长期需要
+  }
+  computeplane = {
+    instance_type               = "ecs.g8i.2xlarge" # 8C32G：Flink JM(4g)+TM(22g, 8 slot) 专用
+    count                       = 1
+    disk_size                   = 40
+    data_disk_size              = 100               # Flink 日志 + RocksDB 本地 tmp
+    data_disk_performance_level = "PL0"
+    private_ips                 = ["<vswitch 内空闲 IP，如 10.18.0.203>"]
+    hostnames                   = ["ecs-compute-01"]
+    hostname_prefix             = "ecs-compute"
+    internet_max_bandwidth_out  = 100               # 装机期下载 Flink/jars；跑稳后可调 0
   }
 }

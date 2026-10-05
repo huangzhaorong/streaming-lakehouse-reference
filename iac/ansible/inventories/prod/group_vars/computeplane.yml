@@ -1,0 +1,10 @@
+# 计算面（ecs-compute-01）：Flink JM+TM / JindoFuse(rw) / reconcile timer
+jindofuse_readonly: false          # reconcile-snapshot 写 reconcile_*.json 需要 rw
+jindofuse_extra_args: ""
+
+# 数据盘（100G ESSD PL0）：实施首日 lsblk 实测设备名回填 host_vars（禁 auto-detect，adtrader D32 教训）
+# host_vars/ecs-compute-01.yml → slr_data_disk_device: /dev/vdb
+
+flink_task_slots: 8
+flink_jm_memory: 4g
+flink_tm_memory: 22g               # 8C32G 专用计算面：JM 4g + TM 22g + 系统/JindoFuse 余量

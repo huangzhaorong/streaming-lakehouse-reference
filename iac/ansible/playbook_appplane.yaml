@@ -1,5 +1,5 @@
 # 应用面部署：Python 服务 ×6 / query-api / Prometheus / Grafana / n8n / JindoFuse(ro)
-# 前置：playbook_dataplane 已完成（Iggy/Flink 可达）；vault.yml 就位
+# 前置：playbook_dataplane + playbook_computeplane 已完成（Iggy/Flink 可达）；vault.yml 就位
 # 用法：ansible-playbook playbook_appplane.yaml
 - name: SLR appplane (ecs-app-01)
   hosts: appplane

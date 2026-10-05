@@ -1,5 +1,5 @@
 # ============================================================
-# Flink {{ flink_version }} — SLR 数据面（JM+TM 同机 standalone）
+# Flink {{ flink_version }} — SLR 计算面（JM+TM 同机 standalone；ZK/Iggy/Fluss 在数据面跨机）
 # OSS 模式：{{ flink_oss_mode }}（group_vars/all.yml 切换，评审 I6）
 #   jindo  = jindo-flink 直写 OSS-HDFS；lib 内禁止 flink-oss-fs-hadoop（互斥）
 #   plugin = flink-oss-fs-hadoop 写 state 桶（普通 OSS）；湖仓桶由 core-site 的
@@ -27,7 +27,7 @@ state.savepoints.dir: oss://{{ slr_state_bucket }}/flink/savepoints
 {% endif %}
 execution.checkpointing.interval: 60s
 high-availability: zookeeper
-high-availability.zookeeper.quorum: 127.0.0.1:{{ zk_port }}
+high-availability.zookeeper.quorum: {{ data_ip }}:{{ zk_port }}
 high-availability.cluster-id: /streaming-lakehouse
 {% if flink_oss_mode == 'jindo' %}
 high-availability.storageDir: oss://{{ slr_bucket }}/flink/ha

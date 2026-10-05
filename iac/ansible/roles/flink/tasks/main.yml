@@ -99,11 +99,11 @@
     mode: "0644"
   notify: restart flink
 
-- name: 渲染 Flink SQL（warehouse→OSS-HDFS，iggy/fluss host→本机；幂等覆盖）
+- name: 渲染 Flink SQL（warehouse→OSS-HDFS，iggy/fluss host→数据面跨机地址；幂等覆盖）
   ansible.builtin.shell: |
     SLR_WAREHOUSE_BASE="{{ slr_warehouse_base }}" \
-    SLR_IGGY_HOST=127.0.0.1 \
-    SLR_FLUSS_BOOTSTRAP=127.0.0.1:{{ fluss_coordinator_port }} \
+    SLR_IGGY_HOST={{ data_ip }} \
+    SLR_FLUSS_BOOTSTRAP={{ data_ip }}:{{ fluss_coordinator_port }} \
     bash /opt/slr/scripts/render-sql.sh /opt/slr/flink/sql /opt/flink/sql
   changed_when: false
 

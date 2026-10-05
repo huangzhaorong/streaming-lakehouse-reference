@@ -13,6 +13,7 @@ from datetime import datetime
 GROUP_MAP = {
     "dataplane": "dataplane",
     "appplane": "appplane",
+    "computeplane": "computeplane",
 }
 
 

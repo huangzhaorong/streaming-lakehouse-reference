@@ -1,8 +1,8 @@
 # Flink SQL 作业提交（顺序重要；seed-balance 一次性带守卫）
-# 前置：playbook_dataplane 完成、G1/G2/G3 金丝雀通过（runbook Phase 2）
+# 前置：playbook_dataplane + playbook_computeplane 完成、G1/G2/G3 金丝雀通过（runbook Phase 2）
 # 用法：ansible-playbook playbook_jobs.yaml
 - name: SLR Flink jobs submission
-  hosts: dataplane
+  hosts: computeplane
   become: true
   become_user: flink
   vars:
@@ -19,7 +19,7 @@
       become_user: root
     - name: 未渲染则失败
       ansible.builtin.fail:
-        msg: "{{ sql_dir }} 无渲染产物——先跑 playbook_dataplane（flink role 渲染 SQL）"
+        msg: "{{ sql_dir }} 无渲染产物——先跑 playbook_computeplane（flink role 渲染 SQL）"
       when: not sql_stat.stat.exists
 
     # 1) DDL + 湖仓流作业（Paimon ohlcv_1m + Iceberg ticks）

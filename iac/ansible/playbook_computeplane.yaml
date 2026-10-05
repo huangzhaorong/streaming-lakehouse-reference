@@ -1,0 +1,10 @@
+# 计算面部署：Flink（JM+TM）/ JindoFuse(rw) / reconcile timer
+# 前置：playbook_dataplane 完成（ZK/Iggy/Fluss 跨机可达）+ OSS-HDFS 控制台开通（runbook Phase 1）
+# 用法：ansible-playbook playbook_computeplane.yaml
+- name: SLR computeplane (ecs-compute-01)
+  hosts: computeplane
+  become: true
+  roles:
+    - common
+    - jindofuse      # rw 挂载（reconcile JSON 写入）
+    - flink

@@ -17,7 +17,7 @@ scrape_configs:
   - job_name: "flink"
     scrape_interval: 5s
     static_configs:
-      - targets: ["{{ data_ip }}:{{ flink_metrics_port }}"]
+      - targets: ["{{ compute_ip }}:{{ flink_metrics_port }}"]
 
   - job_name: "lancer"
     scrape_interval: 5s

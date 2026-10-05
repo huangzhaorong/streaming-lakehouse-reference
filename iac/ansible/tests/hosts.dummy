@@ -5,6 +5,10 @@ ecs-data-01 ansible_host=127.0.0.1 ansible_user=root
 [appplane]
 ecs-app-01 ansible_host=127.0.0.2 ansible_user=root
 
+[computeplane]
+ecs-compute-01 ansible_host=127.0.0.3 ansible_user=root
+
 [cluster:children]
 dataplane
 appplane
+computeplane

@@ -21,6 +21,9 @@ TF_OUTPUT = {
                 {"instance_name": "ecs-app-01", "ansible_host": "10.0.0.12", "ansible_user": "root"},
                 {"instance_name": "ecs-app-02", "ansible_host": "10.0.0.13", "ansible_user": "root"},
             ],
+            "computeplane": [
+                {"instance_name": "ecs-compute-01", "ansible_host": "10.0.0.14", "ansible_user": "root"},
+            ],
         }
     }
 }
@@ -34,7 +37,8 @@ def test_groups_rendered_with_hosts():
     out = render()
     assert "[dataplane]\necs-data-01 ansible_host=10.0.0.11 ansible_user=root" in out
     assert "[appplane]\necs-app-01 ansible_host=10.0.0.12 ansible_user=root" in out
-    assert "[cluster:children]\ndataplane\nappplane" in out
+    assert "[computeplane]\necs-compute-01 ansible_host=10.0.0.14 ansible_user=root" in out
+    assert "[cluster:children]\ndataplane\nappplane\ncomputeplane" in out
 
 
 def test_order_preserved():

@@ -62,6 +62,10 @@ grafana_port: 3001
 n8n_port: 5678
 query_api_port: 8009   # /metrics 同端口（无独立 metrics 端口）
 
+# --- 跨面地址（inventory 生成后可用；三面共用）---
+data_ip: "{{ hostvars[groups['dataplane'][0]].ansible_host }}"
+compute_ip: "{{ hostvars[groups['computeplane'][0]].ansible_host }}"
+
 # --- 业务 ---
 trading_pairs: "BTC-USD,ETH-USD,SOL-USD,DOGE-USD,AVAX-USD,LINK-USD"
 iggy_root_username: admin
