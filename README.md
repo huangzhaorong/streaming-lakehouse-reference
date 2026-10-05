@@ -42,14 +42,14 @@ Infrastructure-as-Code (Terraform + Ansible, self-contained in `iac/`).
 ## Deployment Topology（cn-beijing）
 
 ```
-ecs-app-01 应用面 4C16G              ecs-data-01 数据面 8C32G
-  poller/bridge/lancer(+indexer timer)   Iggy :8090/:3000 · ZooKeeper :2181
-  replay(oneshot) · query-api :8009      Fluss :9123/:9124 · Flink JM :8081/TM
-  Prometheus :9090 · Grafana :3001       reconcile timer(5min)
-  n8n :5678 · /mnt/warehouse(fuse ro)    /mnt/warehouse(fuse rw)
-        └────────────┬────────────────────────┘
-          OSS-HDFS 桶 slr-lakehouse-prod
-          warehouse/{paimon,iceberg,backfill} + flink/{checkpoints,savepoints,ha}
+ecs-app-01 应用面 4C16G              ecs-data-01 数据面 8C32G       ecs-compute-01 计算面 8C32G
+  poller/bridge/lancer(+indexer timer)   Iggy :8090/:3000              Flink JM :8081/TM(8 slot)
+  replay(oneshot) · query-api :8009      ZooKeeper :2181               reconcile timer(5min)
+  Prometheus :9090 · Grafana :3001       Fluss :9123/:9124             /mnt/warehouse(fuse rw)
+  n8n :5678 · /mnt/warehouse(fuse ro)
+        └────────────┬──────────────────────┬───────────────────────────┘
+                OSS-HDFS 桶 slr-lakehouse-prod
+        warehouse/{paimon,iceberg,backfill} + flink/{checkpoints,savepoints,ha}
 ```
 
 公网入向仅 SSH 白名单；UI 一律 SSH 隧道（详见 runbook）。
@@ -59,8 +59,8 @@ ecs-app-01 应用面 4C16G              ecs-data-01 数据面 8C32G
 ## Repository Layout
 
 ```
-iac/terraform/     资源供给（ECS×2 / OSS×3 / RAM role / SG，environments/prod）
-iac/ansible/       软件安装与配置（10 roles / 3 playbooks / group_vars 版本锁）
+iac/terraform/     资源供给（ECS×3 / OSS×3 / RAM role / SG，environments/prod）
+iac/ansible/       软件安装与配置（10 roles / 4 playbooks / group_vars 版本锁）
 iac/scripts/       terraform output → ansible inventory 生成管道
 flink/sql/         Flink SQL 作业（部署期经 scripts/render-sql.sh 渲染路径）
 poller/ bridge/ replay/ lancer/   Python 服务（systemd 部署，零 compose 依赖）
@@ -83,7 +83,8 @@ docs/              runbook-ecs-deploy（部署手册）· env-reference · clean
 cd iac/terraform/environments/prod && terraform init -backend-config=backend.conf && terraform apply
 ./iac/scripts/generate-inventory.sh prod
 cd iac/ansible
-ansible-playbook playbook_dataplane.yaml        # 金丝雀 G1/G2/G3（runbook）
+ansible-playbook playbook_dataplane.yaml        # Iggy/ZK/Fluss
+ansible-playbook playbook_computeplane.yaml     # Flink/JindoFuse(reconcile)；金丝雀 G1/G2/G3（runbook）
 ansible-playbook playbook_jobs.yaml             # Flink 作业（seed 守卫内置）
 ansible-playbook playbook_appplane.yaml         # Python/n8n/监控
 ```
@@ -91,7 +92,7 @@ ansible-playbook playbook_appplane.yaml         # Python/n8n/监控
 ## Verify
 
 ```bash
-curl -s http://localhost:8081/jobs/overview    # ≥3 流作业 RUNNING（数据面）
+curl -s http://localhost:8081/jobs/overview    # ≥3 流作业 RUNNING（计算面）
 curl -s http://localhost:8009/api/health       # query-api
 curl -s http://localhost:8009/api/state        # n8n 决策状态镜像（updated_at 滚动）
 # Grafana :3001（SSH 隧道）5 dashboards；n8n :5678 Executions 60s 周期 success
@@ -104,7 +105,7 @@ bash scripts/tests/test_render_sql.sh
 PYTHONPATH=services/query-api/_deps python3 -m pytest services/query-api n8n/tests/test_workflow_json.py iac/scripts/tests -q
 node --test n8n/tests/*.mjs                    # decide() 风控 14 例
 terraform -chdir=iac/terraform/environments/prod validate
-ansible-playbook -i iac/ansible/tests/hosts.dummy iac/ansible/playbook_dataplane.yaml --syntax-check
+for pb in dataplane computeplane appplane jobs; do ansible-playbook -i iac/ansible/tests/hosts.dummy iac/ansible/playbook_$pb.yaml --syntax-check; done
 ```
 
 ---

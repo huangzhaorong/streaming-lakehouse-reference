@@ -30,11 +30,11 @@ cd iac/terraform/environments/prod
 terraform init -backend-config=backend.conf
 # ⚠️ 本机 init 需临时把 backend.conf endpoint 改为公网 oss-cn-beijing.aliyuncs.com（勿提交）
 terraform plan -out tfplan && terraform apply tfplan
-terraform output   # 记录 data_ip / app_ip / bucket_lakehouse / bucket_artifacts
+terraform output   # 记录 data_ip / compute_ip / app_ip / bucket_lakehouse / bucket_artifacts
 ```
 
 **带外步骤①：开通 OSS-HDFS**（Terraform 无此能力）
-控制台 → OSS → `slr-lakehouse-prod` → 数据湖加速（OSS-HDFS/JindoFS 服务）→ 开通（cn-beijing）。未开通则 Phase 2 G1 金丝雀必失败（天然拦截）。
+控制台 → OSS → `slr-lakehouse-prod` → 数据湖加速（OSS-HDFS/JindoFS 服务）→ 开通（cn-beijing）。未开通则 Phase 3 G1 金丝雀必失败（天然拦截）。
 
 **上传部署工件**：
 ```bash
@@ -46,20 +46,37 @@ ossutil cp dist/iggy-0.7.0-linux-x86_64.tar.gz.sha256 oss://slr-artifacts-prod/
 **生成 inventory**：
 ```bash
 ./iac/scripts/generate-inventory.sh prod    # terraform output → iac/ansible/inventories/prod/hosts
-ansible -i iac/ansible/inventories/prod all -m ping   # 双机 pong
+ansible -i iac/ansible/inventories/prod all -m ping   # 三机 pong
 ```
 
-host_vars 实测回填（禁 auto-detect）：SSH 上两台 `lsblk` 确认数据盘设备名 →
-`iac/ansible/inventories/prod/host_vars/ecs-data-01.yml`（与 app）写 `slr_data_disk_device: /dev/vdb`。
+host_vars 实测回填（禁 auto-detect）：SSH 上三台 `lsblk` 确认数据盘设备名 →
+`iac/ansible/inventories/prod/host_vars/ecs-data-01.yml`（与 ecs-compute-01、ecs-app-01）写 `slr_data_disk_device: /dev/vdb`。
 
-## Phase 2 — 数据面
+## Phase 2 — 数据面（Iggy / ZooKeeper / Fluss）
 
 ```bash
 cd iac/ansible
 ansible-playbook playbook_dataplane.yaml
 ```
 
-**G1 金丝雀（OSS-HDFS 读写，硬门槛）** — SSH ecs-data-01：
+**G2 金丝雀（Iggy HTTP）**（stream/topics 已由 iggy role 幂等 bootstrap——prices/orders/replay ×3 分区；playbook 内含 list 硬校验）：
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/users/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<vault_iggy_password>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+curl -s -X POST http://localhost:3000/streams/crypto/topics/prices/messages -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"partitioning":{"kind":"messages_key","value":"'$(printf BTC-USD | base64)'"},"messages":[{"id":0,"payload":"'$(printf '{"canary":1}' | base64)'"}]}'
+# 判定：HTTP 2xx；iggy CLI poll 回读可见
+```
+前置核对：`/opt/iggy/configs/server.toml` 的 `data_dir` 已指向 /data/iggy（提取件布局差异时手工修正后 `systemctl restart iggy`）。
+
+## Phase 3 — 计算面（Flink / JindoFuse rw / reconcile）
+
+```bash
+ansible-playbook playbook_computeplane.yaml
+```
+
+**G1 金丝雀（OSS-HDFS 读写，硬门槛）** — SSH ecs-compute-01：
 ```bash
 sudo -u flink env JAVA_HOME=/usr/lib/jvm/java-17-openjdk HADOOP_CONF_DIR=/opt/flink/conf/hadoop \
   /opt/flink/bin/sql-client.sh embedded <<'EOSQL'
@@ -73,22 +90,11 @@ EOSQL
 **失败回退（R1/R2，全 IaC 无手工改机器）**：
 1. `iac/ansible/inventories/prod/group_vars/all.yml` → `flink_oss_mode: plugin`
 2. vault 填 `vault_oss_access_key_id/secret`（plugin 模式的 flink-oss-fs-hadoop 需 AK；湖仓桶仍走 JindoSDK bucket 级 dls 路由 + ECS_ROLE）
-3. 重跑 `ansible-playbook playbook_dataplane.yaml`（role 自动换 jar：flink-oss-fs-hadoop 进 lib、jindo-flink 移除；state 目录切 `slr-lakehouse-prod-state` 桶）
+3. 重跑 `ansible-playbook playbook_computeplane.yaml`（role 自动换 jar：flink-oss-fs-hadoop 进 lib、jindo-flink 移除；state 目录切 `slr-lakehouse-prod-state` 桶）
 4. 重跑 G1。若 ECS_ROLE 也失败（403）：核对 RAM role 绑定（terraform output instance_registry）后仍失败则 jindo 模式改用 vault AK（flink-conf 模板内置 R2 回退块）。
 JindoFuse 挂载不受模式切换影响（始终 JindoSDK + dls URI）。
 
-**G2 金丝雀（Iggy HTTP）**（stream/topics 已由 iggy role 幂等 bootstrap——prices/orders/replay ×3 分区；playbook 内含 list 硬校验）：
-```bash
-TOKEN=$(curl -s -X POST http://localhost:3000/users/login -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<vault_iggy_password>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-curl -s -X POST http://localhost:3000/streams/crypto/topics/prices/messages -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"partitioning":{"kind":"messages_key","value":"'$(printf BTC-USD | base64)'"},"messages":[{"id":0,"payload":"'$(printf '{"canary":1}' | base64)'"}]}'
-# 判定：HTTP 2xx；iggy CLI poll 回读可见
-```
-前置核对：`/opt/iggy/configs/server.toml` 的 `data_dir` 已指向 /data/iggy（提取件布局差异时手工修正后 `systemctl restart iggy`）。
-
-**G3 金丝雀（fuse 直读，两台都跑）**：
+**G3 金丝雀（fuse 直读，计算面跑；应用面部署后在 Phase 4 再跑一遍）**：
 ```bash
 ls /mnt/warehouse/canary/
 python3 -c "import duckdb; print(duckdb.sql(\"SELECT * FROM read_parquet('/mnt/warehouse/canary/**/*.parquet')\").fetchall())"
@@ -106,11 +112,13 @@ ansible-playbook playbook_jobs.yaml
 
 **彻底重置 Flink 状态**（重放 seed 等）：清 ZK `zkCli.sh deleteall /streaming-lakehouse` + 清 `oss://slr-lakehouse-prod/flink/ha/` → 重启 JM/TM。
 
-## Phase 3 — 应用面
+## Phase 4 — 应用面
 
 ```bash
 ansible-playbook playbook_appplane.yaml
 ```
+
+**G3 金丝雀复跑（应用面 fuse 只读挂载）**：SSH ecs-app-01 执行上文 G3 两条命令，判定 `[(1,)]`。
 
 **带外步骤②：n8n owner 账号**（首启一次性）：
 ```bash
@@ -128,7 +136,7 @@ sudo -u n8n env HOME=/var/lib/n8n N8N_USER_FOLDER=/var/lib/n8n /opt/node/bin/n8n
 
 **backfill 历史数据**（lancer/replay 需要历史深度；不迁移旧 compose 数据）：
 ```bash
-# SSH ecs-data-01（fuse rw）；脚本依赖 pyarrow/requests，用 uv 临时环境（评审 I8）：
+# SSH ecs-compute-01（fuse rw）；脚本依赖 pyarrow/requests，用 uv 临时环境（评审 I8）：
 cd /opt/slr/scripts
 /usr/local/bin/uv run --python 3.12 --with pyarrow --with requests backfill-candles.py --days 60   # 产出 → /mnt/warehouse/backfill/
 sudo -u flink env JAVA_HOME=/usr/lib/jvm/java-17-openjdk HADOOP_CONF_DIR=/opt/flink/conf/hadoop \
@@ -136,7 +144,7 @@ sudo -u flink env JAVA_HOME=/usr/lib/jvm/java-17-openjdk HADOOP_CONF_DIR=/opt/fl
 systemctl start lancer-indexer    # 首轮建 LanceDB（此后每小时 timer 增量）
 ```
 
-## Phase 4 — 端到端验证与切换
+## Phase 5 — 端到端验证与切换
 
 ```bash
 # 1. 价格流入
@@ -173,10 +181,10 @@ curl -X POST http://localhost:5678/webhook/killswitch -d '{"killswitch":false}' 
 
 | 操作 | 命令 |
 |---|---|
-| 服务状态 | `systemctl status iggy zookeeper fluss-coordinator fluss-tablet flink-jobmanager flink-taskmanager jindofuse-warehouse`（数据面）；`systemctl status poller bridge lancer query-api prometheus grafana n8n`（应用面） |
+| 服务状态 | `systemctl status iggy zookeeper fluss-coordinator fluss-tablet`（数据面）；`systemctl status flink-jobmanager flink-taskmanager jindofuse-warehouse reconcile-snapshot.timer`（计算面）；`systemctl status poller bridge lancer query-api prometheus grafana n8n`（应用面） |
 | 重部署代码 | 本机 `ansible-playbook playbook_appplane.yaml`（rsync + restart；workflow JSON 变更自动 re-import） |
 | Flink 作业重提交 | `ansible-playbook playbook_jobs.yaml`（seed 有守卫） |
-| UI 访问 | SSH 隧道：`ssh -L 3001:localhost:3001 -L 5678:localhost:5678 -L 8081:localhost:8081 root@<app_ip>`（8081 需再跳数据面或用 ui_cidrs 白名单） |
+| UI 访问 | SSH 隧道：`ssh -L 3001:localhost:3001 -L 5678:localhost:5678 root@<app_ip>`；Flink UI：`ssh -L 8081:localhost:8081 root@<compute_ip>`（或经 app-01 二跳/ui_cidrs 白名单） |
 | 日志 | `journalctl -u <service> -f` |
 | n8n 兜底停机 | `sudo -u n8n N8N_USER_FOLDER=/var/lib/n8n /opt/node/bin/n8n unpublish:workflow --id=slr-trading-decision` |
 
@@ -190,4 +198,5 @@ curl -X POST http://localhost:5678/webhook/killswitch -d '{"killswitch":false}' 
 | jindofuse 反复重启 | `journalctl -u jindofuse-warehouse`；常见为 RAM role 未绑定（terraform output instance_registry 核对）或 endpoint 写错 |
 | n8n execution 连续失败 | UI 看节点错误；staticData 未 commit（失败轮不落账，偏保守）；持续失败先 killswitch 再排查 |
 | Iggy 无法启动 | 核对 server.toml data_dir 与 /data/iggy 权限；`ldd /opt/iggy/iggy-server` 验证 glibc 兼容 |
-| Flink TM 注册不上 | JM/TM 同机 rpc=127.0.0.1；查 flink-conf 渲染与 /var/log/flink |
+| Flink TM 注册不上 | JM/TM 同机（计算面）rpc=127.0.0.1；查 flink-conf 渲染与 /var/log/flink |
+| Flink 连不上 ZK/Iggy/Fluss | 跨机地址=data_ip（flink-conf quorum / render-sql 注入）；SG inner_access 应全通，`curl <data_ip>:2181/9123/8090` 排查 |

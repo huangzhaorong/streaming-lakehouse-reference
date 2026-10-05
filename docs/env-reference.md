@@ -9,7 +9,7 @@
 |---|---|---|
 | `COINBASE_WS_URL` | appplane.yml → poller env | 不变 |
 | `TRADING_PAIRS` | all.yml `trading_pairs` | poller/lancer/query-api/n8n(SLR_TRADING_PAIRS) 共用 |
-| `IGGY_HOST` | appplane.yml `data_ip`（跨机）/ flink role 渲染 127.0.0.1（SQL） | compose 服务名 → IP |
+| `IGGY_HOST` | all.yml `data_ip`（跨机）/ flink role 渲染 `data_ip`（SQL，计算面跨机连数据面） | compose 服务名 → IP |
 | `IGGY_TCP_PORT`/`IGGY_HTTP_PORT` | all.yml `iggy_tcp_port: 8090` / `iggy_http_port: 3000` | |
 | `IGGY_USERNAME`/`IGGY_PASSWORD` | all.yml `iggy_root_username: admin` + **vault** `vault_iggy_password` | 原默认 iggy/iggy 废除 |
 | `IGGY_STREAM`/`IGGY_TOPIC`/`IGGY_TOPIC_PARTITIONS`/`IGGY_REPLAY_TOPIC`/`IGGY_ORDERS_TOPIC` | all.yml `iggy_stream` + 各服务 env | |

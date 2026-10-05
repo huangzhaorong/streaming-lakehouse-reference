@@ -19,31 +19,31 @@ search, and LLM-driven sentiment to build a "Market Time Machine."
 ## Deployment Topology
 
 ```
-                cn-beijing VPC（复用现有 VPC/vSwitch，data source 只读引用）
-                单安全组 sg-slr-prod（inner_access_policy=Accept ⇒ 两台全端口互通）
-┌──────────────────────────────┐         ┌──────────────────────────────┐
-│ ecs-app-01 应用面 4C16G       │         │ ecs-data-01 数据面 8C32G      │
-│ poller    :8000 ──TCP 8090───┼────────▶│ Iggy 0.7.0 TCP:8090 HTTP:3000│
-│ bridge    :8001 ──TCP 8090───┼────────▶│   /data/iggy（本地盘）         │
-│ replay    :8002 (oneshot)    │         │ ZooKeeper 3.9.3 :2181        │
-│ lancer    :8003/:8004        │         │ Fluss coord:9123 tablet:9124 │
-│ lancer-indexer (timer 每小时) │         │   /data/fluss/{data,remote}  │
-│ query-api :8009 (api+metrics)│         │ Flink 1.20.3 JM:8081         │
-│ Prometheus :9090 ──scrape────┼─:9249──▶│   TM 8 slots metrics :9249   │
-│ Grafana   :3001              │         │ reconcile timer (5min)       │
-│ n8n       :5678 (/metrics)   │         │                              │
-│ /mnt/warehouse (fuse 只读)    │         │ /mnt/warehouse (fuse 读写)    │
-│ /data/lancer (LanceDB)       │         │                              │
-└──────┬───────────────────────┘         └──────┬───────────────────────┘
-       │ JindoFuse (bucket 内嵌 dls URI)          │ jindo-flink/JindoSDK (纯桶名 URI + dls endpoint)
-       ▼                                         ▼
+              cn-beijing VPC（复用现有 VPC/vSwitch，data source 只读引用）
+              单安全组 sg-slr-prod（inner_access_policy=Accept ⇒ 三台全端口互通）
+┌─────────────────────────────┐  ┌────────────────────────────┐  ┌─────────────────────────────┐
+│ ecs-app-01 应用面 4C16G      │  │ ecs-data-01 数据面 8C32G    │  │ ecs-compute-01 计算面 8C32G  │
+│ poller    :8000 ─TCP 8090───┼─▶│ Iggy 0.7.0 TCP:8090        │◀─┼─ Flink 1.20.3 JM:8081       │
+│ bridge    :8001 ─TCP 8090───┼─▶│   HTTP:3000 /data/iggy     │  │   TM 8 slots metrics :9249  │
+│ replay    :8002 (oneshot)   │  │ ZooKeeper 3.9.3 :2181 ◀────┼──┼─ (Flink HA quorum)          │
+│ lancer    :8003/:8004       │  │ Fluss coord:9123 ◀─────────┼──┼─ (SQL connector)            │
+│ lancer-indexer (timer 每小时)│  │   tablet:9124              │  │ reconcile timer (5min)      │
+│ query-api :8009 (api+metrics)│ │   /data/fluss/{data,remote}│  │ /mnt/warehouse (fuse 读写)   │
+│ Prometheus :9090 ─scrape────┼──┼────────────────────────────┼─▶│   (:9249)                   │
+│ Grafana   :3001             │  │                            │  │                             │
+│ n8n       :5678 (/metrics) ─┼──┼─HTTP 3000（Iggy 发单）──────▶│  │                             │
+│ /mnt/warehouse (fuse 只读)   │  │                            │  │                             │
+│ /data/lancer (LanceDB)      │  │                            │  │                             │
+└──────┬──────────────────────┘  └────────────────────────────┘  └──────┬──────────────────────┘
+       │ JindoFuse (bucket 内嵌 dls URI)                                  │ jindo-flink/JindoSDK (纯桶名 URI + dls endpoint)
+       ▼                                                                 ▼
   OSS-HDFS 桶 slr-lakehouse-prod（HDFS 语义控制台带外开通）
   ├── warehouse/paimon/crypto.db/{ohlcv_1m,balance,trades,reconcile_balance.json}
   ├── warehouse/iceberg/crypto/ticks/…    ├── warehouse/backfill/
   └── flink/{checkpoints,savepoints,ha}
   备用桶 slr-lakehouse-prod-state（R1 回退：flink-oss-fs-hadoop 插件方案时启用）
   工件桶 slr-artifacts-prod（public-read：iggy 提取件等）
-  公网出向：app-01→Coinbase WSS、DashScope；两台装机期下载
+  公网出向：app-01→Coinbase WSS、DashScope；三台装机期下载
   公网入向：仅 SSH 白名单；Grafana/n8n/Flink UI 走 SSH 隧道
 ```
 
@@ -125,12 +125,12 @@ TCP 8090（Python 客户端）+ HTTP 3000（n8n 发单：`POST /users/login` →
 `POST /streams/crypto/topics/orders/messages`，partitioning=messages_key(pair)）。
 unit 带 `LimitMEMLOCK=infinity` + `AmbientCapabilities=CAP_SYS_NICE`（io_uring）。
 
-### Apache Flink 1.20.3（数据面，JM+TM 同机 standalone）
+### Apache Flink 1.20.3（计算面，JM+TM 同机 standalone；Iggy/Fluss/ZK 跨机连数据面）
 3 个流作业（lakehouse-tier / fluss-hot-tier / clearing-house）+ 按需（ohlcv-candles /
 replay-pipeline / import-backfill）。ZooKeeper HA（cluster-id `/streaming-lakehouse`）。
 lib = 8 个 connector jar（`scripts/download-jars.sh` SHA-256 校验）+ JindoSDK 三件套
 （jindo-flink-nextarch-full / jindo-sdk / jindo-core）；**lib 内禁止 flink-oss-fs-hadoop**（互斥）。
-SQL 本体不含环境路径——部署期 `render-sql.sh` 渲染（warehouse→oss://，host→127.0.0.1）。
+SQL 本体不含环境路径——部署期 `render-sql.sh` 渲染（warehouse→oss://，iggy/fluss host→数据面 IP）。
 
 ### Fluss / ZooKeeper / Paimon / Iceberg / LanceDB
 职责同前（热层 SQL / 协调 / 温层聚合表 / 冷层 tick 归档 / 向量库）。
@@ -154,7 +154,7 @@ reconcile JSON：`/api/balance`；n8n 镜像：`/api/state`(GET/POST 原子写) 
 position_value/pnl/trades_total/signals_checked）供 Grafana trading dashboard。
 不含决策逻辑，不连 Iggy。
 
-### Reconciliation（数据面 systemd timer，5min）
+### Reconciliation（计算面 systemd timer，5min）
 `scripts/reconcile-snapshot.sh`：Flink SQL(batch) 查 Paimon balance（PK 表唯一权威读法）
 → tableau 解析 → 原子写 `/mnt/warehouse/paimon/crypto.db/reconcile_balance.json` →
 取消遗留 SELECT 作业。
@@ -173,8 +173,8 @@ infinity 数据源指向 query-api；trading 指标已从 consensus_* 平移为 
 | 8090/3000 | Iggy TCP/HTTP | data | 客户端 / n8n 发单 |
 | 2181 | ZooKeeper | data | Flink HA + Fluss |
 | 9123/9124 | Fluss coord/tablet | data | |
-| 8081 | Flink JM REST/UI | data | SSH 隧道 |
-| 9249 | Flink TM metrics | data | Prometheus 跨机抓取 |
+| 8081 | Flink JM REST/UI | compute | SSH 隧道（经 app-01 再跳 compute） |
+| 9249 | Flink TM metrics | compute | Prometheus 跨机抓取 |
 | 8000/8001/8002 | poller/bridge/replay metrics | app | |
 | 8003/8004 | lancer API/metrics | app | |
 | 8009 | query-api（api+metrics） | app | Grafana infinity 数据源 |
@@ -214,4 +214,4 @@ infinity 数据源指向 query-api；trading 指标已从 consensus_* 平移为 
 - **n8n 而非自研 Python**：决策链可视化、可编辑、执行历史内建；风控核心以纯函数（decide.js）保存可测试性
 - **DashScope Qwen 而非本地 Ollama**：无 GPU 依赖、按 token 计费、OpenAI-compatible 可切换模型
 - **systemd 而非容器**：Iggy io_uring 需求（memlock/SYS_NICE）裸机天然满足；单机单进程无编排需求
-- **两台分层**：JVM 有状态组件与 Python/观测面资源隔离，故障域分离，成本可控
+- **三台分层**：数据（Iggy/ZK/Fluss）、计算（Flink）、应用（Python/观测/n8n）三面资源与故障域分离；Flink 内存吃紧时可单独升配计算面
